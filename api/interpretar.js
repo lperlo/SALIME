@@ -1,5 +1,5 @@
 
-// api/interpretar.js
+/ api/interpretar.js
 //
 // Endpoint serverless (Vercel) para SALIME — BASE 03 — GEMINI.
 //
@@ -65,50 +65,4 @@ export default async function handler(req, res) {
   }
 
   try {
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: SYSTEM_PROMPT }],
-          },
-          contents: [
-            {
-              role: "user",
-              parts: [{ text }],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-          },
-        }),
-      }
-    );
-
-    if (!geminiRes.ok) {
-      res.status(502).json({ error: "gemini_error" });
-      return;
-    }
-
-    const data = await geminiRes.json();
-    const raw = (data.candidates?.[0]?.content?.parts || [])
-      .map((part) => part.text || "")
-      .join("")
-      .trim();
-
-    // Por más que pedimos responseMimeType: "application/json", limpiamos
-    // por las dudas si viniera envuelto en ```json ... ```.
-    const cleaned = raw.replace(/^```json\s*|^```\s*|```$/g, "").trim();
-    const parsed = JSON.parse(cleaned);
-
-    res.status(200).json(parsed);
-  } catch (err) {
-    res.status(500).json({ error: "interpretation_failed" });
-  }
-}
-
+    
