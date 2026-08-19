@@ -1,14 +1,14 @@
 
 // api/interpretar.js
 //
-// Endpoint serverless (Vercel) para SALIME.
+// Endpoint serverless (Vercel) para SALIME — BASE 03 — GEMINI.
 //
 // Reemplaza SOLO la interpretación de texto libre que antes hacía la
 // heurística de parseInput(). El frontend le manda el texto que escribió
 // el usuario y este endpoint devuelve el mismo "contrato" de campos que
 // ya esperaba el resto de la app (parseInputHeuristic / generatePlan).
 //
-// La API key de Anthropic se lee desde process.env.ANTHROPIC_API_KEY,
+// La API key de Gemini se lee desde process.env.GEMINI_API_KEY,
 // que es una variable de entorno configurada en Vercel del lado servidor.
 // Nunca se envía al cliente ni queda en el código del navegador.
 
@@ -44,6 +44,8 @@ No inventes datos que el texto no sugiere: ante ambigüedad, dejá el campo corr
 
 Devolvé ÚNICAMENTE el objeto JSON, nada de texto antes ni después.`;
 
+const GEMINI_MODEL = "gemini-2.5-flash";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "method_not_allowed" });
@@ -56,41 +58,51 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     res.status(500).json({ error: "missing_api_key" });
     return;
   }
 
   try {
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 300,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: text }],
-      }),
-    });
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [{ text: SYSTEM_PROMPT }],
+          },
+          contents: [
+            {
+              role: "user",
+              parts: [{ text }],
+            },
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+          },
+        }),
+      }
+    );
 
-    if (!anthropicRes.ok) {
-      res.status(502).json({ error: "anthropic_error" });
+    if (!geminiRes.ok) {
+      res.status(502).json({ error: "gemini_error" });
       return;
     }
 
-    const data = await anthropicRes.json();
-    const raw = (data.content || [])
-      .map((block) => (block.type === "text" ? block.text : ""))
+    const data = await geminiRes.json();
+    const raw = (data.candidates?.[0]?.content?.parts || [])
+      .map((part) => part.text || "")
       .join("")
       .trim();
 
-    // El modelo puede devolver el JSON envuelto en ```json ... ``` a pesar
-    // de la instrucción; lo limpiamos por las dudas antes de parsear.
+    // Por más que pedimos responseMimeType: "application/json", limpiamos
+    // por las dudas si viniera envuelto en ```json ... ```.
     const cleaned = raw.replace(/^```json\s*|^```\s*|```$/g, "").trim();
     const parsed = JSON.parse(cleaned);
 
@@ -100,4 +112,3 @@ export default async function handler(req, res) {
   }
 }
 
-        
