@@ -1,9 +1,8 @@
-
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { ArrowLeft, ArrowRight, MapPin, Wallet, Users, Sparkles } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
-/* Tokens */
+/* Tokens                                                              */
 /* ------------------------------------------------------------------ */
 const C = {
   bg: "#F8F7F3",
@@ -19,13 +18,13 @@ const C = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Mock data pools — noche (original) */
+/* Mock data pools — noche (original)                                  */
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
-/* Mock data pools — noche (original) */
+/* Mock data pools — noche (original)                                  */
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
-/* Mock data pools — noche (original) */
+/* Mock data pools — noche (original)                                  */
 /* ------------------------------------------------------------------ */
 const CENA = [
   { name: "El Rincón de Mateo", emoji: "🍽️", price: 1, rating: 4.5, dist: 6, mood: ["tranquilo"], outdoor: false, kidFriendly: true, nightOnly: false, why: "cocina casera, mesas separadas, se puede hablar sin gritar" },
@@ -52,7 +51,7 @@ const FINAL = [
 ];
 
 /* ------------------------------------------------------------------ */
-/* Mock data pools — familia / día (nuevo, para el bug de niños) */
+/* Mock data pools — familia / día (nuevo, para el bug de niños)       */
 /* ------------------------------------------------------------------ */
 const ACTIVIDAD_FAMILIA = [
   { name: "Parque Sarmiento", emoji: "🌳", price: 1, rating: 4.6, dist: 5, mood: ["tranquilo"], outdoor: true, kidFriendly: true, why: "espacio verde grande con juegos, ideal para que los chicos corran un rato" },
@@ -73,7 +72,7 @@ const CIERRE_FAMILIA = [
 ];
 
 /* ------------------------------------------------------------------ */
-/* Plantillas de plan (horarios + etiquetas) */
+/* Plantillas de plan (horarios + etiquetas)                           */
 /* ------------------------------------------------------------------ */
 const STEPS_NIGHT = [
   { key: "cena", label: "PARA ARRANCAR", time: "20:30", pool: CENA },
@@ -117,7 +116,7 @@ const STEPS_FAMILY = [
 const BUDGET_TIER = { "Económico": 1, "Medio": 2, "Flexible": 3 };
 
 /* ------------------------------------------------------------------ */
-/* Interpretación de texto libre */
+/* Interpretación de texto libre                                       */
 /* ------------------------------------------------------------------ */
 function parseInputHeuristic(text) {
   const t = (text || "").toLowerCase();
@@ -207,7 +206,7 @@ async function parseInputAI(text) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Selección de lugares */
+/* Selección de lugares                                                */
 /* ------------------------------------------------------------------ */
 function pick(pool, { budgetTier, mood, close, outdoor, usedNames, excludeNames, allowNightOnly }) {
   let base = allowNightOnly ? pool : pool.filter((p) => !p.nightOnly);
@@ -258,7 +257,7 @@ function shiftTime(timeStr, minutes) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Generación del plan */
+/* Generación del plan                                                 */
 /* ------------------------------------------------------------------ */
 function generatePlan({
   budgetLabel, moodLabel, close, outdoor, hasKids, morning, afternoon, daytimeGeneric,
@@ -300,7 +299,7 @@ const distanceLabel = (i, dist) =>
   i === 0 ? `${dist} min caminando` : `${dist} min desde la parada anterior`;
 
 /* ------------------------------------------------------------------ */
-/* Small building blocks */
+/* Small building blocks                                               */
 /* ------------------------------------------------------------------ */
 function Chip({ icon: Icon, placeholder, value, options, onChange }) {
   const handleClick = () => {
@@ -344,7 +343,7 @@ function Logo({ size = 28 }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Screens */
+/* Screens                                                              */
 /* ------------------------------------------------------------------ */
 function HomeScreen({ onPlan, onSurprise }) {
   const [text, setText] = useState("");
@@ -384,4 +383,696 @@ function HomeScreen({ onPlan, onSurprise }) {
     let afternoon = interpreted.afternoon;
     const daytimeGeneric = !morning && !afternoon && interpreted.daytimeGeneric;
     if (!morning && !afternoon && !daytimeGeneric && interpreted.explicitHour !== null) {
-      if (interpreted.explicitHour >= 5 && interpreted.explicitHour 
+      if (interpreted.explicitHour >= 5 && interpreted.explicitHour < 12) morning = true;
+      else if (interpreted.explicitHour >= 12 && interpreted.explicitHour < 19) afternoon = true;
+      // hour >= 19 o < 5: se deja en noche (default).
+    }
+
+    let timeShiftMin = 0;
+    if (interpreted.explicitHour !== null) {
+      const base = hasKids ? STEPS_FAMILY : morning ? STEPS_MORNING : afternoon ? STEPS_DAY : daytimeGeneric ? STEPS_MIDDAY : STEPS_NIGHT;
+      const [bh, bm] = base[0].time.split(":").map(Number);
+      timeShiftMin = interpreted.explicitHour * 60 - (bh * 60 + bm);
+    }
+
+    onPlan({
+      budgetLabel,
+      moodLabel,
+      close,
+      outdoor,
+      hasKids,
+      morning,
+      afternoon,
+      daytimeGeneric,
+      timeShiftMin,
+      hasContext: understoodChips.length > 0,
+      contextLine: understoodChips.length ? understoodChips.join(" · ") : "",
+    });
+  };
+
+  return (
+    <div className="screen">
+      <div className="home-top">
+        <Logo size={26} />
+      </div>
+      <p className="tagline">Tu plan, sin tener que pensarlo.</p>
+
+      <h1 className="q">¿Qué tenés ganas de hacer?</h1>
+      <textarea
+        className="input-main"
+        rows={3}
+        placeholder="Estoy en Nueva Córdoba, somos dos, queremos comer rico, gastar poco y después hacer algo tranquilo."
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+
+      {understoodChips.length > 0 && (
+        <p className="understood">Entendí: {understoodChips.join(" · ")}</p>
+      )}
+
+      <div className="chip-row">
+        <Chip
+          icon={MapPin}
+          placeholder="Dónde"
+          value={filters.location}
+          options={["Cerca tuyo", "Centro", "Nueva Córdoba", "Güemes", "Alta Córdoba"]}
+          onChange={(v) => setFilters((f) => ({ ...f, location: v }))}
+        />
+        <Chip
+          icon={Wallet}
+          placeholder="Presupuesto"
+          value={filters.budget}
+          options={["Económico", "Medio", "Flexible"]}
+          onChange={(v) => setFilters((f) => ({ ...f, budget: v }))}
+        />
+        <Chip
+          icon={Users}
+          placeholder="Con quién"
+          value={filters.people}
+          options={["Solo", "Pareja", "Amigos", "Familia"]}
+          onChange={(v) => setFilters((f) => ({ ...f, people: v }))}
+        />
+        <Chip
+          icon={Sparkles}
+          placeholder="Qué onda"
+          value={filters.vibe}
+          options={["Comer", "Tomar algo", "Paseo", "Cultura", "Fiesta"]}
+          onChange={(v) => setFilters((f) => ({ ...f, vibe: v }))}
+        />
+      </div>
+
+      <div className="cta-stack">
+        <button className="btn btn--primary" onClick={handleSubmit}>
+          ✨ Armame el plan
+        </button>
+        <button className="btn btn--secondary" onClick={onSurprise}>
+          🎲 Sorprendeme
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Timeline({ plan, surprise }) {
+  return (
+    <div className="timeline">
+      {plan.map((step, i) => (
+        <div className="tl-row" key={step.key}>
+          <div className="tl-marker-col">
+            <div className={`tl-dot ${surprise ? "tl-dot--coral" : ""}`}>{step.venue.emoji}</div>
+            {i < plan.length - 1 && <div className="tl-line" />}
+          </div>
+          <div className="tl-content">
+            <div className="tl-eyebrow">
+              <span className="tl-eyebrow-dot" aria-hidden="true" />
+              {step.label}
+            </div>
+            <div className="tl-time">{step.time}</div>
+            <div className="tl-card">
+              <div className="tl-card-name">{step.venue.name}</div>
+              <div className="tl-card-meta">
+                ⭐ {ratingLabel(step.venue.rating)} · {priceLabel(step.venue.price)} · 📍{" "}
+                {distanceLabel(i, step.venue.dist)}
+              </div>
+              <p className="tl-card-why">Porque {step.venue.why}.</p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ResultScreen({ plan, surprise, contextLine, working, onAdjust, onReshuffle, onHome }) {
+  return (
+    <div className="screen">
+      <button className="back-link" onClick={onHome} disabled={working}>
+        <ArrowLeft size={16} /> Empezar de nuevo
+      </button>
+
+      <h1 className="h1">{surprise ? "🎲 Te armamos algo inesperado" : "✨ Tu plan está listo"}</h1>
+      <p className="sub">
+        {surprise
+          ? "Elegimos algo distinto para hoy. Si no era lo que buscabas, lo volvemos a tirar."
+          : contextLine
+          ? `Encontré una opción que combina ${contextLine} y queda cerca tuyo.`
+          : "Encontré una opción pensada para hoy, arrancando por lo más cerca tuyo."}
+      </p>
+
+      <Timeline plan={plan} surprise={surprise} />
+
+      <div className="cta-stack" style={{ marginTop: 28 }}>
+        {surprise ? (
+          <button className="btn btn--secondary" onClick={onReshuffle} disabled={working}>
+            {working ? "Pensando…" : "🔄 Sorprendeme de nuevo"}
+          </button>
+        ) : (
+          <button className="btn btn--primary" onClick={onAdjust} disabled={working}>
+            ¿Querés cambiar algo? <ArrowRight size={16} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdjustScreen({ onQuick, onFreeText, onBack, working }) {
+  const [text, setText] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const submit = () => {
+    if (!text.trim() || working) return;
+    onFreeText(text);
+    setSent(true);
+    setText("");
+    setTimeout(() => setSent(false), 1800);
+  };
+
+  return (
+    <div className="screen">
+      <button className="back-link" onClick={onBack} disabled={working}>
+        <ArrowLeft size={16} /> Volver al plan
+      </button>
+
+      <h1 className="h1">¿Querés cambiar algo?</h1>
+
+      <div className="quick-grid">
+        <button className="btn btn--chip" onClick={() => onQuick("barato")} disabled={working}>💰 Más barato</button>
+        <button className="btn btn--chip" onClick={() => onQuick("cerca")} disabled={working}>🚶 Más cerca</button>
+        <button className="btn btn--chip" onClick={() => onQuick("divertido")} disabled={working}>🎉 Más divertido</button>
+        <button className="btn btn--chip" onClick={() => onQuick("tranquilo")} disabled={working}>🌙 Más tranquilo</button>
+        <button className="btn btn--chip btn--chip-wide" onClick={() => onQuick("todo")} disabled={working}>🔄 Cambiar todo</button>
+      </div>
+
+      <label className="label-small" htmlFor="adjust-text">Decile a Salime qué cambiar</label>
+      <textarea
+        id="adjust-text"
+        className="input-main"
+        rows={2}
+        placeholder="No quiero caminar tanto y prefiero algo al aire libre."
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      {sent && <p className="understood">Ajustado ✨ — mirá el plan actualizado.</p>}
+
+      <div className="cta-stack">
+        <button className="btn btn--primary" onClick={submit} disabled={working}>
+          {working ? "Ajustando…" : "Ajustar plan"}
+        </button>
+        <button className="btn btn--secondary" onClick={onBack} disabled={working}>Ver plan actualizado</button>
+      </div>
+    </div>
+  );
+}
+
+function GeneratingScreen({ label }) {
+  return (
+    <div className="screen generating" role="status" aria-live="polite">
+      <Logo size={26} />
+      <div className="generating-body">
+        <span className="generating-dot" aria-hidden="true" />
+        <p className="generating-text">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* App                                                                  */
+/* ------------------------------------------------------------------ */
+export default function App() {
+  const [screen, setScreen] = useState("home");
+  const [plan, setPlan] = useState(null);
+  const [surprise, setSurprise] = useState(false);
+  const [contextLine, setContextLine] = useState("");
+  const [lastFilters, setLastFilters] = useState({});
+  const [generatingLabel, setGeneratingLabel] = useState("Pensando tu plan…");
+  const [working, setWorking] = useState(false);
+  const containerRef = useRef(null);
+  const timers = useRef([]);
+
+  useEffect(() => {
+    if (containerRef.current) containerRef.current.scrollTop = 0;
+  }, [screen]);
+
+  // Clear any pending timers on unmount so no state updates leak.
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const afterDelay = (ms, fn) => {
+    if (prefersReducedMotion) {
+      fn();
+      return;
+    }
+    timers.current.push(setTimeout(fn, ms));
+  };
+
+  const handlePlan = (opts) => {
+    setLastFilters(opts);
+    setGeneratingLabel("Pensando tu plan…");
+    setScreen("generating");
+    afterDelay(700, () => {
+      setSurprise(false);
+      setContextLine(opts.contextLine);
+      setPlan(generatePlan(opts));
+      setScreen("result");
+    });
+  };
+
+  const handleSurprise = () => {
+    setGeneratingLabel("Armando algo inesperado…");
+    setScreen("generating");
+    afterDelay(700, () => {
+      setSurprise(true);
+      setPlan(generatePlan({ random: true }));
+      setScreen("result");
+    });
+  };
+
+  const runRegeneration = (next) => {
+    const excludeNames = plan ? plan.map((s) => s.venue.name) : [];
+    setWorking(true);
+    afterDelay(450, () => {
+      setLastFilters(next);
+      setPlan(generatePlan({ ...next, excludeNames }));
+      setWorking(false);
+    });
+  };
+
+  const handleReshuffle = () => runRegeneration({ random: true });
+
+  const handleQuickAdjust = (type) => {
+    let next = { ...lastFilters };
+    if (type === "barato") next.budgetLabel = "Económico";
+    if (type === "cerca") next.close = true;
+    if (type === "divertido") next.moodLabel = "Animado";
+    if (type === "tranquilo") next.moodLabel = "Tranquilo";
+    if (type === "todo") {
+      next = {
+        random: false,
+        moodLabel: null,
+        budgetLabel: null,
+        close: false,
+        outdoor: false,
+        timeShiftMin: 0,
+        // "Cambiar todo" reordena el plan, pero no debería sacar a una
+        // familia con niños, ni a un pedido de mañana/tarde, de la
+        // plantilla horaria que ya se había resuelto.
+        hasKids: lastFilters.hasKids,
+        morning: lastFilters.morning,
+        afternoon: lastFilters.afternoon,
+        daytimeGeneric: lastFilters.daytimeGeneric,
+        contextLine: lastFilters.contextLine,
+      };
+    }
+    runRegeneration(next);
+  };
+
+  const handleFreeTextAdjust = async (text) => {
+    let parsed;
+    try {
+      parsed = await parseInputAI(text);
+    } catch (err) {
+      parsed = parseInputHeuristic(text);
+    }
+    const next = { ...lastFilters };
+    if (parsed.budget) next.budgetLabel = parsed.budget;
+    if (parsed.mood) next.moodLabel = parsed.mood;
+    if (parsed.close) next.close = true;
+    if (parsed.outdoor) next.outdoor = true;
+    if (parsed.earlier) next.timeShiftMin = (lastFilters.timeShiftMin || 0) - 60;
+    runRegeneration(next);
+  };
+
+  const goHome = () => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    setWorking(false);
+    setScreen("home");
+    setPlan(null);
+    setSurprise(false);
+    setContextLine("");
+    setLastFilters({});
+  };
+
+  return (
+    <div className="app-shell">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+        * { box-sizing: border-box; }
+        .app-shell {
+          min-height: 100vh;
+          background: ${C.bg};
+          display: flex;
+          justify-content: center;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          color: ${C.text};
+        }
+        .phone {
+          width: 100%;
+          max-width: 430px;
+          min-height: 100vh;
+          background: ${C.bg};
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        .screen {
+          padding: 28px 22px 48px;
+          animation: fadeSlide 0.35s ease both;
+        }
+        @keyframes fadeSlide {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .screen { animation: none; }
+        }
+
+        .home-top { margin-bottom: 4px; }
+        .logo-svg { display: block; }
+        .tagline {
+          font-size: 14px;
+          color: ${C.ink};
+          opacity: 0.75;
+          margin: 0 0 30px;
+          font-weight: 500;
+        }
+        .q {
+          font-family: 'Fredoka', sans-serif;
+          font-weight: 600;
+          font-size: 22px;
+          color: ${C.ink};
+          margin: 0 0 14px;
+          line-height: 1.25;
+        }
+        .h1 {
+          font-family: 'Fredoka', sans-serif;
+          font-weight: 600;
+          font-size: 24px;
+          color: ${C.ink};
+          margin: 4px 0 8px;
+        }
+        .sub {
+          font-size: 14.5px;
+          line-height: 1.5;
+          color: ${C.text};
+          opacity: 0.8;
+          margin: 0 0 26px;
+        }
+
+        .input-main {
+          width: 100%;
+          border: 1.5px solid ${C.inkBorder};
+          background: ${C.white};
+          border-radius: 18px;
+          padding: 16px 16px;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-size: 15px;
+          color: ${C.text};
+          resize: none;
+          line-height: 1.5;
+          transition: border-color 0.15s ease;
+        }
+        .input-main::placeholder { color: rgba(36,49,58,0.4); }
+        .input-main:focus {
+          outline: none;
+          border-color: ${C.ink};
+        }
+        .input-main:focus-visible {
+          outline: 2px solid ${C.coral};
+          outline-offset: 2px;
+        }
+
+        .understood {
+          font-size: 13px;
+          color: ${C.ink};
+          background: ${C.lavender};
+          border-radius: 12px;
+          padding: 9px 13px;
+          margin: 12px 0 0;
+          font-weight: 500;
+        }
+
+        .chip-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin: 18px 0 30px;
+        }
+        .chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          padding: 12px 13px;
+          border-radius: 20px;
+          border: 1px solid ${C.inkBorder};
+          background: #FFFDF8;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-size: 13.5px;
+          color: ${C.ink};
+          cursor: pointer;
+          font-weight: 500;
+        }
+        .chip--set {
+          border: 1px solid ${C.inkBorder};
+          background: rgba(24,59,78,0.07);
+        }
+        .chip:focus-visible {
+          outline: 2px solid ${C.coral};
+          outline-offset: 2px;
+        }
+        .chip__icon { flex-shrink: 0; color: ${C.ink}; }
+
+        .cta-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .btn {
+          border: none;
+          border-radius: 16px;
+          padding: 16px 20px;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-weight: 600;
+          font-size: 15.5px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 52px;
+          transition: transform 0.12s ease, opacity 0.12s ease;
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn:focus-visible {
+          outline: 2px solid ${C.coral};
+          outline-offset: 2px;
+        }
+        .btn:disabled {
+          opacity: 0.55;
+          cursor: default;
+          transform: none;
+        }
+
+        .generating {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          min-height: 70vh;
+          justify-content: center;
+        }
+        .generating-body {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-top: 22px;
+        }
+        .generating-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: ${C.coral};
+          animation: pulseDot 1.1s ease-in-out infinite;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .generating-dot { animation: none; }
+        }
+        @keyframes pulseDot {
+          0%, 100% { opacity: 0.35; transform: scale(0.85); }
+          50% { opacity: 1; transform: scale(1); }
+        }
+        .generating-text {
+          font-family: 'Fredoka', sans-serif;
+          font-weight: 600;
+          font-size: 17px;
+          color: ${C.ink};
+          margin: 0;
+        }
+        .btn--primary { background: ${C.ink}; color: ${C.white}; }
+        .btn--secondary { background: #FFFDF8; color: ${C.ink}; border: 1.5px solid ${C.ink}; }
+        .btn--chip {
+          background: ${C.white};
+          color: ${C.ink};
+          border: 1.5px solid ${C.inkBorder};
+          font-size: 14px;
+          min-height: 46px;
+          padding: 12px 10px;
+        }
+
+        .quick-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-bottom: 26px;
+        }
+        .btn--chip-wide { grid-column: 1 / -1; }
+
+        .label-small {
+          display: block;
+          font-size: 12.5px;
+          font-weight: 600;
+          color: ${C.ink};
+          opacity: 0.7;
+          margin-bottom: 8px;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+
+        .back-link {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: none;
+          border: none;
+          color: ${C.ink};
+          opacity: 0.65;
+          font-size: 13.5px;
+          font-weight: 600;
+          padding: 8px 4px;
+          margin: -8px 0 12px -4px;
+          cursor: pointer;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+        .back-link:focus-visible {
+          outline: 2px solid ${C.coral};
+          outline-offset: 2px;
+        }
+        .back-link:disabled {
+          opacity: 0.5;
+          cursor: default;
+        }
+
+        .timeline { margin-top: 6px; }
+        .tl-row { display: flex; gap: 14px; }
+        .tl-marker-col {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          width: 40px;
+          flex-shrink: 0;
+        }
+        .tl-dot {
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          background: ${C.white};
+          border: 1.5px solid ${C.ink};
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 15px;
+          flex-shrink: 0;
+        }
+        .tl-dot--coral { border-color: ${C.coral}; }
+        .tl-line {
+          width: 1.5px;
+          flex: 1;
+          background: ${C.inkLine};
+          margin: 4px 0;
+        }
+        .tl-content { flex: 1; padding-bottom: 26px; }
+        .tl-eyebrow {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.06em;
+          color: ${C.ink};
+          opacity: 0.85;
+          margin-bottom: 3px;
+        }
+        .tl-eyebrow-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: ${C.coral};
+          flex-shrink: 0;
+        }
+        .tl-time {
+          font-size: 13px;
+          font-weight: 600;
+          color: ${C.ink};
+          opacity: 0.7;
+          margin-bottom: 8px;
+        }
+        .tl-card {
+          background: ${C.white};
+          border: 1px solid ${C.inkBorder};
+          border-radius: 16px;
+          padding: 14px 16px;
+          box-shadow: 0 1px 2px rgba(24,59,78,0.04);
+        }
+        .tl-card-name {
+          font-family: 'Fredoka', sans-serif;
+          font-weight: 600;
+          font-size: 16px;
+          color: ${C.ink};
+          margin-bottom: 4px;
+        }
+        .tl-card-meta {
+          font-size: 12.5px;
+          color: ${C.text};
+          opacity: 0.7;
+          margin-bottom: 8px;
+        }
+        .tl-card-why {
+          font-size: 13.5px;
+          line-height: 1.45;
+          color: ${C.text};
+          opacity: 0.85;
+          margin: 0;
+        }
+      `}</style>
+
+      <div className="phone" ref={containerRef}>
+        {screen === "home" && <HomeScreen onPlan={handlePlan} onSurprise={handleSurprise} />}
+        {screen === "generating" && <GeneratingScreen label={generatingLabel} />}
+        {screen === "result" && plan && (
+          <ResultScreen
+            plan={plan}
+            surprise={surprise}
+            contextLine={contextLine}
+            working={working}
+            onAdjust={() => setScreen("adjust")}
+            onReshuffle={handleReshuffle}
+            onHome={goHome}
+          />
+        )}
+        {screen === "adjust" && (
+          <AdjustScreen
+            onQuick={handleQuickAdjust}
+            onFreeText={handleFreeTextAdjust}
+            onBack={() => setScreen("result")}
+            working={working}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
