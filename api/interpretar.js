@@ -44,7 +44,7 @@ No inventes datos que el texto no sugiere: ante ambigüedad, dejá el campo corr
 
 Devolvé ÚNICAMENTE el objeto JSON, nada de texto antes ni después.`;
 
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-3.6-flash";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
