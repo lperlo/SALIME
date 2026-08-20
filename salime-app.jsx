@@ -742,22 +742,24 @@ const CIERRE_FAMILIA = [
  * que aunque cambie el contenido de los pools esto sigue funcionando.
  */
 const POOL_KEYS = new Map([
-  [CENA, "CENA"],
-  [BEBIDA, "BEBIDA"],
-  [FINAL, "FINAL"],
-  [CULTURA, "CULTURA"],
-  [PASEO, "PASEO"],
-  [AIRE_LIBRE, "AIRE_LIBRE"],
-  [FIESTA, "FIESTA"],
-  [ACTIVIDAD_FAMILIA, "ACTIVIDAD_FAMILIA"],
-  [MERIENDA_FAMILIA, "MERIENDA_FAMILIA"],
-  [CIERRE_FAMILIA, "CIERRE_FAMILIA"],
+  [CENA, "comer"],
+  [BEBIDA, "beber"],
+  // FINAL se usa como cierre/postre: lo limitamos a lugares de comida
+  // para que nunca pueda devolver plazas u otros lugares genéricos.
+  [FINAL, "comer"],
+  [CULTURA, "cultura"],
+  [PASEO, "paseo"],
+  [AIRE_LIBRE, "aire_libre"],
+  [FIESTA, "fiesta"],
+  [ACTIVIDAD_FAMILIA, "familia"],
+  [MERIENDA_FAMILIA, "familia"],
+  [CIERRE_FAMILIA, "comer"],
 ]);
 
 /*
  * Pide a api/lugares.js lugares reales de una categoría en una
- * ciudad/zona. Nunca lanza: si algo falla, devuelve [] y quien llama
- * cae de nuevo al pool mock correspondiente.
+ * ciudad/zona. Si algo falla, devuelve [] para que el plan pueda
+ * informar que no encontró un lugar real, sin inventar nombres.
  */
 async function fetchRealPool(poolKey, city) {
   try {
@@ -778,10 +780,9 @@ async function fetchRealPool(poolKey, city) {
 }
 
 /*
- * Dado un conjunto de steps (con su pool mock ya asignado) y una
- * ciudad, devuelve un mapa { poolKey: [lugares reales] } solo para
- * las categorías que realmente hacen falta en este plan, y solo si
- * Geoapify encontró algo.
+ * Dado un conjunto de steps y una ciudad, devuelve un mapa
+ * { poolKey: [lugares reales] } solo para las categorías que realmente
+ * hacen falta en este plan, y solo si Geoapify encontró algo.
  */
 async function fetchPoolOverrides(steps, city) {
   if (!city) return {};
@@ -947,10 +948,10 @@ const STEPS_CULTURA = [
     pool: CULTURA,
   },
   {
-    key: "paseo",
+    key: "cultura_3",
     label: "PARA TERMINAR",
     time: "19:30",
-    pool: PASEO,
+    pool: CULTURA,
   },
 ];
 
@@ -1758,10 +1759,14 @@ async function generatePlan({
 
     const poolKey = POOL_KEYS.get(step.pool);
 
-    const activePool =
-      poolKey && poolOverrides[poolKey]
-        ? poolOverrides[poolKey]
-        : step.pool;
+    // Con una ubicación proporcionada por el usuario, solo aceptamos
+    // lugares que vinieron de Geoapify para la categoría correcta.
+    // Si no hay resultados reales, el pool queda vacío y venue será null.
+    const activePool = location && String(location).trim()
+      ? (poolKey && poolOverrides[poolKey]
+          ? poolOverrides[poolKey]
+          : [])
+      : step.pool;
 
     const venue = pick(activePool, {
       budgetTier,
@@ -2417,8 +2422,7 @@ function Timeline({
                 }`}
               >
                 {
-                  step.venue
-                    .emoji
+                  step.venue ? step.venue.emoji : "—"
                 }
               </div>
 
@@ -2444,11 +2448,9 @@ function Timeline({
 
               <div className="tl-card">
                 <div className="tl-card-name">
-                  {
-                    step
-                      .venue
-                      .name
-                  }
+                  {step.venue
+                    ? step.venue.name
+                    : "No encontramos un lugar real adecuado"}
                 </div>
 
                 <div className="tl-card-meta">
@@ -2475,11 +2477,9 @@ function Timeline({
 
                 <p className="tl-card-why">
                   Porque{" "}
-                  {
-                    step
-                      .venue
-                      .why
-                  }
+                  {step.venue
+                    ? step.venue.why
+                    : "Geoapify no encontró un lugar real adecuado para este paso"}
                   .
                 </p>
               </div>
