@@ -77,6 +77,78 @@ const VIBE_INTENT = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Horarios demo (apertura/cierre por lugar)                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Horarios demo de cada lugar. Los rangos que cruzan medianoche
+ * (ej. "18:00" -> "02:00") están soportados por isOpenAt().
+ */
+const DEMO_HOURS = {
+  "El Rincón de Mateo": ["10:00", "23:30"],
+  "Verde Oliva": ["12:00", "23:30"],
+  "Sabor a Barrio": ["12:00", "23:30"],
+  "Fuego Lento": ["13:00", "00:30"],
+  "La Terraza del Este": ["17:00", "01:00"],
+
+  "Vermutería Sur": ["12:00", "01:00"],
+  "El Aperitivo": ["16:00", "01:00"],
+  "Bar Federal": ["18:00", "02:00"],
+  "La Cervecería del Fondo": ["18:00", "02:00"],
+  "Mixología Nueva Córdoba": ["20:00", "02:00"],
+
+  "Heladería Cassata": ["11:00", "23:30"],
+  "Plaza San Martín de noche": ["20:00", "02:00"],
+  "Rooftop Calma": ["17:00", "00:30"],
+  "Jazz en el Sótano": ["21:00", "02:00"],
+  "Mirador del Cerro": ["16:00", "22:00"],
+
+  "Galería Horizonte": ["10:00", "18:00"],
+  "Museo del Centro": ["10:00", "18:00"],
+  "Teatro La Esquina": ["19:00", "23:30"],
+  "Centro de Arte Abierto": ["14:00", "20:00"],
+
+  "Paseo del Buen Pastor": ["10:00", "23:00"],
+  "Parque Sarmiento": ["08:00", "20:00"],
+  "Costanera del Río": ["08:00", "20:00"],
+
+  "Museo de los Niños": ["10:00", "18:00"],
+  "Confitería El Ciervo": ["08:00", "22:00"],
+  "Waffle & Co": ["09:00", "22:00"],
+  "Pizzería de la Cañada": ["12:00", "00:00"],
+  "La Parrillita Familiar": ["12:00", "00:00"],
+  "Patio de la Abuela": ["12:00", "23:30"],
+};
+
+function timeToMinutes(timeStr) {
+  const [h, m] = String(timeStr)
+    .split(":")
+    .map(Number);
+
+  return h * 60 + m;
+}
+
+function isOpenAt(place, minute) {
+  if (minute === null || minute === undefined) {
+    return true;
+  }
+
+  const range = DEMO_HOURS[place.name];
+
+  if (!range) return true;
+
+  const from = timeToMinutes(range[0]);
+  const to = timeToMinutes(range[1]);
+
+  if (from <= to) {
+    return minute >= from && minute < to;
+  }
+
+  // Cruza medianoche (ej. 18:00 -> 02:00)
+  return minute >= from || minute < to;
+}
+
+/* ------------------------------------------------------------------ */
 /* Mock data — gastronomía                                             */
 /* ------------------------------------------------------------------ */
 
@@ -763,6 +835,12 @@ const STEPS_FAMILY = [
 /* Nuevos planes según intención                                      */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Ahora el segundo paso también sale del pool de CULTURA (en vez de
+ * merienda), para que la intención cultural pese más en la estructura
+ * del plan. Si a esa hora no queda ningún lugar cultural abierto,
+ * pick() cae de forma natural a su fallback habitual.
+ */
 const STEPS_CULTURA = [
   {
     key: "cultura",
@@ -771,13 +849,10 @@ const STEPS_CULTURA = [
     pool: CULTURA,
   },
   {
-    key: "cafe",
+    key: "cultura_2",
     label: "SEGUIR",
     time: "18:00",
-    pool: [
-      ...MERIENDA_FAMILIA,
-      ...FINAL.filter((p) => p.name === "Heladería Cassata"),
-    ],
+    pool: CULTURA,
   },
   {
     key: "paseo",
@@ -808,6 +883,11 @@ const STEPS_PASEO = [
   },
 ];
 
+/*
+ * El paso del medio ahora también sale de AIRE_LIBRE (antes usaba
+ * MERIENDA_FAMILIA, que podía traer lugares como "Waffle & Co" que
+ * rompen la sensación de "estar al aire libre").
+ */
 const STEPS_AIRE_LIBRE = [
   {
     key: "aire",
@@ -816,10 +896,10 @@ const STEPS_AIRE_LIBRE = [
     pool: AIRE_LIBRE,
   },
   {
-    key: "merienda",
+    key: "aire_2",
     label: "SEGUIR",
     time: "17:45",
-    pool: MERIENDA_FAMILIA,
+    pool: AIRE_LIBRE,
   },
   {
     key: "aire_final",
@@ -901,6 +981,42 @@ const BUDGET_TIER = {
 /* ------------------------------------------------------------------ */
 /* Interpretación heurística                                           */
 /* ------------------------------------------------------------------ */
+
+/*
+ * Patrones de intención evaluados por posición en el texto: la
+ * intención "principal" es la que aparece primero en la frase, no la
+ * última regla que matchea en una cadena de if/else. Esto evita, por
+ * ejemplo, que "quiero tomar algo tranquilo... y después pasear" se
+ * interprete como "paseo" en vez de "beber" solo porque el patrón de
+ * paseo estaba antes en el código.
+ */
+const INTENT_PATTERNS = [
+  { intent: "aire_libre", regex: /aire libre|al aire libre|afuera|naturaleza/ },
+  { intent: "cultura", regex: /museo|exposicion|arte|cultural|cultura|teatro/ },
+  {
+    intent: "paseo",
+    regex: /pasear|paseo|caminar|dar una vuelta|recorrer|salir a pasear/,
+  },
+  { intent: "fiesta", regex: /fiesta|boliche|bailar|salir de fiesta/ },
+  { intent: "beber", regex: /tomar algo|tragos|cerveza|\bbar\b|copas|vermut/ },
+  { intent: "comer", regex: /comer|cenar|almorzar|comida|comer rico/ },
+];
+
+function detectIntentByPosition(t) {
+  let bestIntent = null;
+  let bestIndex = Infinity;
+
+  for (const { intent, regex } of INTENT_PATTERNS) {
+    const match = t.match(regex);
+
+    if (match && match.index < bestIndex) {
+      bestIndex = match.index;
+      bestIntent = intent;
+    }
+  }
+
+  return bestIntent;
+}
 
 function parseInputHeuristic(text) {
   const t = normalizeText(text);
@@ -1028,27 +1144,12 @@ function parseInputHeuristic(text) {
 
   if (/aire libre|al aire libre|afuera|naturaleza/.test(t)) {
     out.outdoor = true;
-    out.intent = "aire_libre";
   }
 
-  if (/museo|exposicion|arte|cultural|cultura|teatro/.test(t)) {
-    out.intent = "cultura";
-  } else if (
-    /pasear|paseo|caminar|dar una vuelta|recorrer|salir a pasear/.test(t)
-  ) {
-    out.intent = "paseo";
-  } else if (
-    /fiesta|boliche|bailar|salir de fiesta/.test(t)
-  ) {
-    out.intent = "fiesta";
-  } else if (
-    /tomar algo|tragos|cerveza|bar|copas|vermut/.test(t)
-  ) {
-    out.intent = "beber";
-  } else if (
-    /comer|cenar|almorzar|comida|comer rico/.test(t)
-  ) {
-    out.intent = "comer";
+  const detectedIntent = detectIntentByPosition(t);
+
+  if (detectedIntent) {
+    out.intent = detectedIntent;
   }
 
   if (out.hasKids || out.people === "Familia") {
@@ -1102,6 +1203,46 @@ async function parseInputAI(text) {
   };
 }
 
+/*
+ * Combina lo que devuelve la IA con el heurístico local, usando el
+ * heurístico como red de seguridad para señales que son fáciles de
+ * verificar directamente contra el texto:
+ *
+ * - Si el texto no tiene un patrón "a las N" explícito, no confiamos
+ *   en una hora exacta que la IA haya podido inferir de más (esto es
+ *   lo que causaba el bug del primer paso saliendo siempre a una hora
+ *   rara en "quiero pasar el día").
+ * - "Pasar el día" es una señal fuerte: si el heurístico la detecta,
+ *   se respeta aunque la IA no la haya marcado, y no debe quedar
+ *   compitiendo con ninguna franja específica.
+ */
+function mergeInterpretations(ai, local) {
+  const merged = { ...ai };
+
+  // Si la heurística local detecta una intención explícita,
+  // tiene prioridad sobre una interpretación diferente de Gemini.
+  if (local.intent && local.intent !== "general") {
+    merged.intent = local.intent;
+  }
+
+  if (local.explicitHour === null || local.explicitHour === undefined) {
+    merged.explicitHour = null;
+  }
+
+  merged.daytimeGeneric = !!(merged.daytimeGeneric || local.daytimeGeneric);
+
+  if (
+    merged.daytimeGeneric &&
+    (merged.explicitHour === null || merged.explicitHour === undefined)
+  ) {
+    merged.morning = false;
+    merged.afternoon = false;
+    merged.night = false;
+  }
+
+  return merged;
+}
+
 /* ------------------------------------------------------------------ */
 /* Selección inteligente                                               */
 /* ------------------------------------------------------------------ */
@@ -1115,6 +1256,7 @@ function pick(
     outdoor,
     hasKids,
     timeBucket,
+    exactMinute,
     usedNames,
     excludeNames,
     allowNightOnly,
@@ -1152,6 +1294,23 @@ function pick(
     }
   }
 
+  /*
+   * 1) HORA COMPATIBLE — el filtro más protegido: si existe al menos
+   * un lugar abierto exactamente a esa hora, nunca recomendamos uno
+   * cerrado, aunque eso implique relajar filtros más adelante (mood,
+   * presupuesto, etc). Solo si NINGÚN lugar del pool está abierto a
+   * esa hora exacta, seguimos con el conjunto anterior.
+   */
+  if (typeof exactMinute === "number") {
+    const openNow = candidates.filter((p) =>
+      isOpenAt(p, exactMinute)
+    );
+
+    if (openNow.length > 0) {
+      candidates = openNow;
+    }
+  }
+
   if (timeBucket) {
     const byTime = candidates.filter(
       (p) =>
@@ -1165,9 +1324,9 @@ function pick(
   }
 
   /*
-   * En presupuesto económico NO relajamos el filtro si existen
-   * opciones económicas. Esto conserva el comportamiento que ya
-   * había funcionado bien.
+   * 2) Presupuesto — en presupuesto económico NO relajamos el filtro
+   * si existen opciones económicas. Esto conserva el comportamiento
+   * que ya había funcionado bien.
    */
   if (budgetTier) {
     const byBudget = candidates.filter(
@@ -1179,6 +1338,7 @@ function pick(
     }
   }
 
+  /* 3) Niños / grupo familiar */
   if (hasKids) {
     const family = candidates.filter(
       (p) => p.kidFriendly
@@ -1189,6 +1349,7 @@ function pick(
     }
   }
 
+  /* 4) Aire libre */
   if (outdoor) {
     const outside = candidates.filter(
       (p) => p.outdoor
@@ -1199,6 +1360,7 @@ function pick(
     }
   }
 
+  /* 5) Mood */
   if (mood) {
     const moodKey = mood.toLowerCase();
 
@@ -1214,8 +1376,10 @@ function pick(
   }
 
   /*
-   * Cuando pide "cerca", elegimos realmente la opción
-   * más cercana dentro del conjunto compatible.
+   * 6) Cercanía / rating — cuando pide "cerca", elegimos realmente la
+   * opción más cercana dentro del conjunto compatible. Si no, evitamos
+   * que siempre salga el mismo lugar ordenando por rating y eligiendo
+   * entre los mejores.
    */
   if (close && !random) {
     return [...candidates].sort(
@@ -1223,10 +1387,6 @@ function pick(
     )[0];
   }
 
-  /*
-   * Para evitar que siempre salga el mismo lugar,
-   * ordenamos por rating y elegimos entre los mejores.
-   */
   const ranked = [...candidates].sort(
     (a, b) => b.rating - a.rating
   );
@@ -1475,6 +1635,23 @@ function generatePlan({
   const usedNames = [];
 
   return steps.map((step) => {
+    /*
+     * Orden correcto: primero calculamos la hora final del paso,
+     * después el lugar. Así evitamos recomendar lugares cerrados
+     * (antes se elegía el lugar según la franja general y recién
+     * después se calculaba/mostraba la hora).
+     */
+    let time = step.time;
+
+    if (!random) {
+      time = shiftTime(
+        step.time,
+        timeShiftMin || 0
+      );
+    }
+
+    const exactMinute = timeToMinutes(time);
+
     const venue = pick(step.pool, {
       budgetTier,
       mood,
@@ -1482,6 +1659,7 @@ function generatePlan({
       outdoor: random ? false : outdoor,
       hasKids,
       timeBucket,
+      exactMinute,
       usedNames,
       excludeNames: random
         ? []
@@ -1500,15 +1678,6 @@ function generatePlan({
     usedNames.push(
       safeVenue.name
     );
-
-    let time = step.time;
-
-    if (!random) {
-      time = shiftTime(
-        step.time,
-        timeShiftMin || 0
-      );
-    }
 
     return {
       ...step,
@@ -1727,8 +1896,11 @@ function HomeScreen({
 
   const handleSubmit =
     async () => {
-      let interpreted =
+      const localHeuristic =
         understood;
+
+      let interpreted =
+        localHeuristic;
 
       try {
         const aiResult =
@@ -1738,7 +1910,10 @@ function HomeScreen({
 
         if (aiResult) {
           interpreted =
-            aiResult;
+            mergeInterpretations(
+              aiResult,
+              localHeuristic
+            );
         }
       } catch (err) {
         /*
@@ -2717,18 +2892,28 @@ export default function App() {
 
   const handleFreeTextAdjust =
     async (text) => {
-      let parsed;
+      const localParsed =
+        parseInputHeuristic(
+          text
+        );
+
+      let parsed =
+        localParsed;
 
       try {
-        parsed =
+        const aiParsed =
           await parseInputAI(
             text
           );
+
+        parsed =
+          mergeInterpretations(
+            aiParsed,
+            localParsed
+          );
       } catch (err) {
         parsed =
-          parseInputHeuristic(
-            text
-          );
+          localParsed;
       }
 
       const next = {
@@ -2858,6 +3043,13 @@ export default function App() {
         next.timeShiftMin =
           hour * 60 -
           (bh * 60 + bm);
+      } else if (parsed.daytimeGeneric) {
+        next.daytimeGeneric = true;
+        next.explicitHour = null;
+        next.morning = false;
+        next.afternoon = false;
+        next.night = false;
+        next.timeShiftMin = 0;
       }
 
       if (parsed.earlier) {
