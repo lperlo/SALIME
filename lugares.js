@@ -1,6 +1,14 @@
 /* ------------------------------------------------------------------ */
 /* api/lugares.js                                                     */
+/*                                                                    */
 /* Busca lugares REALES con Geoapify.                                 */
+/*                                                                    */
+/* Reglas:                                                            */
+/* - La API key vive únicamente en Vercel: GEOAPIFY_API_KEY            */
+/* - Nunca inventa lugares.                                           */
+/* - Nunca usa una calle, barrio o ciudad como nombre de un lugar.    */
+/* - Si no encuentra lugares reales, devuelve places: [].             */
+/* - Respeta ciudad/barrio usando el place_id del geocodificador.     */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
@@ -11,38 +19,45 @@ const INTENT_CATEGORIES = {
     "catering.fast_food",
     "catering.food_court",
   ],
+
   beber: [
     "catering.cafe",
     "catering.bar",
     "catering.pub",
   ],
+
   cultura: [
     "entertainment.museum",
     "entertainment.culture.gallery",
     "entertainment.culture.theatre",
     "entertainment.culture.arts_centre",
   ],
+
   paseo: [
     "leisure.park",
     "tourism.attraction.viewpoint",
     "natural",
   ],
+
   aire_libre: [
     "leisure.park",
     "natural",
     "natural.water",
   ],
+
   fiesta: [
     "entertainment.nightclub",
     "catering.bar",
     "catering.pub",
   ],
+
   familia: [
     "leisure.playground",
     "entertainment.activity_park",
     "entertainment.museum",
     "catering.restaurant",
   ],
+
   general: [
     "catering.restaurant",
     "catering.cafe",
@@ -63,11 +78,14 @@ function estimatePrice(categories) {
         c.includes("park") ||
         c.includes("natural")
     )
-  )
+  ) {
     return 1;
+  }
+
   if (cats.some((c) => c.includes("nightclub"))) return 3;
-  if (cats.some((c) => c.includes("museum") || c.includes("culture")))
+  if (cats.some((c) => c.includes("museum") || c.includes("culture"))) {
     return 2;
+  }
   if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return 2;
   if (cats.some((c) => c.includes("restaurant"))) return 2;
 
@@ -86,6 +104,20 @@ function estimateMood(categories) {
     )
   ) {
     return ["animado"];
+  }
+
+  if (
+    cats.some(
+      (c) =>
+        c.includes("cafe") ||
+        c.includes("museum") ||
+        c.includes("culture") ||
+        c.includes("park") ||
+        c.includes("natural") ||
+        c.includes("playground")
+    )
+  ) {
+    return ["tranquilo"];
   }
 
   return ["tranquilo"];
@@ -122,7 +154,6 @@ function estimateKidFriendly(categories) {
 
 function estimateNightOnly(categories) {
   const cats = categories || [];
-
   return cats.some((c) => c.includes("nightclub"));
 }
 
@@ -133,7 +164,11 @@ function estimateSlots(categories) {
     return ["night"];
   }
 
-  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) {
+  if (
+    cats.some(
+      (c) => c.includes("bar") || c.includes("pub")
+    )
+  ) {
     return ["afternoon", "night"];
   }
 
@@ -148,18 +183,23 @@ function emojiFor(categories) {
   if (cats.some((c) => c.includes("cafe"))) return "☕";
   if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return "🍺";
   if (cats.some((c) => c.includes("nightclub"))) return "🎉";
-  if (cats.some((c) => c.includes("museum") || c.includes("culture")))
+  if (cats.some((c) => c.includes("museum") || c.includes("culture"))) {
     return "🖼️";
+  }
   if (cats.some((c) => c.includes("park"))) return "🌳";
-  if (cats.some((c) => c.includes("natural") || c.includes("water")))
+  if (cats.some((c) => c.includes("natural") || c.includes("water"))) {
     return "🌿";
+  }
   if (cats.some((c) => c.includes("viewpoint"))) return "✨";
   if (
     cats.some(
-      (c) => c.includes("playground") || c.includes("activity_park")
+      (c) =>
+        c.includes("playground") ||
+        c.includes("activity_park")
     )
-  )
+  ) {
     return "🎡";
+  }
 
   return "📍";
 }
@@ -195,7 +235,10 @@ async function geocodeLocation(text) {
   }
 
   const data = await res.json();
-  const results = Array.isArray(data.results) ? data.results : [];
+
+  const results = Array.isArray(data.results)
+    ? data.results
+    : [];
 
   if (results.length === 0) return null;
 
@@ -210,9 +253,15 @@ async function geocodeLocation(text) {
     const city = String(r.city || "").toLowerCase();
     const state = String(r.state || "").toLowerCase();
     const suburb = String(r.suburb || "").toLowerCase();
-    const neighbourhood = String(r.neighbourhood || "").toLowerCase();
-    const district = String(r.district || "").toLowerCase();
-    const formatted = String(r.formatted || "").toLowerCase();
+    const neighbourhood = String(
+      r.neighbourhood || ""
+    ).toLowerCase();
+    const district = String(
+      r.district || ""
+    ).toLowerCase();
+    const formatted = String(
+      r.formatted || ""
+    ).toLowerCase();
 
     const hay = [
       name,
@@ -230,7 +279,11 @@ async function geocodeLocation(text) {
 
     let s = 0;
 
-    if (hayNorm.some((v) => v.includes("cordoba"))) {
+    if (
+      hayNorm.some((v) =>
+        v.includes("cordoba")
+      )
+    ) {
       s += 100;
     }
 
@@ -238,7 +291,11 @@ async function geocodeLocation(text) {
       s += 80;
     }
 
-    if (hayNorm.some((v) => v === wantedNorm)) {
+    if (
+      hayNorm.some(
+        (v) => v === wantedNorm
+      )
+    ) {
       s += 80;
     }
 
@@ -250,19 +307,16 @@ async function geocodeLocation(text) {
       s += 60;
     }
 
-    if (city === wanted) {
-      s += 50;
-    }
-
-    if (name === wanted) {
-      s += 45;
-    }
+    if (city === wanted) s += 50;
+    if (name === wanted) s += 45;
 
     if (formatted.includes(wanted)) {
       s += 20;
     }
 
-    const resultType = String(r.result_type || "").toLowerCase();
+    const resultType = String(
+      r.result_type || ""
+    ).toLowerCase();
 
     if (
       resultType.includes("suburb") ||
@@ -343,7 +397,12 @@ async function searchPlaces({
     : [];
 }
 
-function haversineKm(lat1, lon1, lat2, lon2) {
+function haversineKm(
+  lat1,
+  lon1,
+  lat2,
+  lon2
+) {
   const R = 6371;
 
   const dLat =
@@ -416,7 +475,9 @@ function featureMatchesIntent(
       ? feature.properties
       : {};
 
-  const categories = Array.isArray(props.categories)
+  const categories = Array.isArray(
+    props.categories
+  )
     ? props.categories
     : [];
 
@@ -429,137 +490,156 @@ function featureMatchesIntent(
   );
 }
 
-function normalizeText(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ");
-}
-
+/*
+ * MUY IMPORTANTE:
+ *
+ * Esta función evita que aparezcan:
+ * - nombres de calles
+ * - barrios
+ * - ciudades
+ * - direcciones
+ * - resultados sin nombre comercial
+ *
+ * como si fueran lugares.
+ */
 function looksLikeOnlyAnAddress(feature) {
   const props =
     feature && feature.properties
       ? feature.properties
       : {};
 
-  const categories = Array.isArray(props.categories)
-    ? props.categories
-    : [];
+  const name = String(
+    props.name || ""
+  ).trim();
 
-  const name = String(props.name || "").trim();
-
-  const address = String(
+  const addressLine1 = String(
     props.address_line1 || ""
   ).trim();
 
-  if (!name) return true;
+  const street = String(
+    props.street || ""
+  ).trim();
+
+  const suburb = String(
+    props.suburb || ""
+  ).trim();
+
+  const neighbourhood = String(
+    props.neighbourhood || ""
+  ).trim();
+
+  const district = String(
+    props.district || ""
+  ).trim();
+
+  const city = String(
+    props.city || ""
+  ).trim();
+
+  const categories = Array.isArray(
+    props.categories
+  )
+    ? props.categories.map(String)
+    : [];
+
+  if (!name) {
+    return true;
+  }
 
   if (/^\d{1,6}$/.test(name)) {
     return true;
   }
 
-  const nameNorm = normalizeText(name);
-  const addressNorm = normalizeText(address);
-
-  const streetNorm = normalizeText(
-    props.street
-  );
-
-  const suburbNorm = normalizeText(
-    props.suburb
-  );
-
-  const neighbourhoodNorm = normalizeText(
-    props.neighbourhood
-  );
-
-  const districtNorm = normalizeText(
-    props.district
-  );
-
-  const cityNorm = normalizeText(
-    props.city
-  );
-
-  const stateNorm = normalizeText(
-    props.state
-  );
-
-  const resultType = normalizeText(
-    props.result_type
-  );
-
-  const geographicTypes = [
-    "street",
-    "road",
-    "path",
-    "residential",
-    "neighbourhood",
-    "neighborhood",
-    "suburb",
-    "district",
-    "city",
-    "town",
-    "village",
-    "locality",
-    "state",
-    "county",
-    "postcode",
-    "postalcode",
-  ];
-
+  /*
+   * Si el nombre coincide exactamente con una calle,
+   * NO es un establecimiento.
+   */
   if (
-    geographicTypes.some(
-      (type) =>
-        resultType === type ||
-        resultType.includes(type)
-    )
+    street &&
+    name.toLowerCase() ===
+      street.toLowerCase()
   ) {
     return true;
   }
 
-  const geographicNames = [
-    streetNorm,
-    suburbNorm,
-    neighbourhoodNorm,
-    districtNorm,
-    cityNorm,
-    stateNorm,
-  ].filter(Boolean);
-
-  if (geographicNames.includes(nameNorm)) {
-    return true;
-  }
-
+  /*
+   * Si coincide exactamente con el barrio,
+   * tampoco es un establecimiento.
+   */
   if (
-    addressNorm &&
-    nameNorm === addressNorm
+    suburb &&
+    name.toLowerCase() ===
+      suburb.toLowerCase()
   ) {
     return true;
   }
 
-  const isCatering = categories.some((c) =>
-    String(c).startsWith("catering.")
-  );
+  if (
+    neighbourhood &&
+    name.toLowerCase() ===
+      neighbourhood.toLowerCase()
+  ) {
+    return true;
+  }
 
-  const hasStreet = Boolean(
-    props.street ||
-      props.housenumber ||
-      props.address_line1 ||
-      props.formatted
-  );
+  if (
+    district &&
+    name.toLowerCase() ===
+      district.toLowerCase()
+  ) {
+    return true;
+  }
 
-  if (isCatering && !hasStreet) {
+  /*
+   * Nunca permitir que la ciudad aparezca
+   * como si fuera un lugar.
+   */
+  if (
+    city &&
+    name.toLowerCase() ===
+      city.toLowerCase()
+  ) {
+    return true;
+  }
+
+  /*
+   * Si el nombre es exactamente la dirección,
+   * descartarlo.
+   */
+  if (
+    addressLine1 &&
+    name.toLowerCase() ===
+      addressLine1.toLowerCase()
+  ) {
+    return true;
+  }
+
+  /*
+   * Si no tiene ninguna categoría semántica
+   * de lugar, no lo usamos.
+   */
+  const hasRealPlaceCategory =
+    categories.some(
+      (c) =>
+        c.startsWith("catering.") ||
+        c.startsWith("entertainment.") ||
+        c.startsWith("leisure.") ||
+        c.startsWith("tourism.")
+    );
+
+  if (!hasRealPlaceCategory) {
     return true;
   }
 
   return false;
 }
 
-function mapFeatureToVenue(feature, center) {
-  const props = feature.properties || {};
+function mapFeatureToVenue(
+  feature,
+  center
+) {
+  const props =
+    feature.properties || {};
 
   const categories = Array.isArray(
     props.categories
@@ -577,47 +657,66 @@ function mapFeatureToVenue(feature, center) {
 
   const [lon, lat] = coords;
 
-  const distKm =
-    typeof lat === "number" &&
-    typeof lon === "number"
-      ? haversineKm(
-          center.lat,
-          center.lon,
-          lat,
-          lon
-        )
-      : null;
-
-  const name = props.name;
-
-  if (!name || !String(name).trim()) {
+  if (
+    typeof lat !== "number" ||
+    typeof lon !== "number"
+  ) {
     return null;
   }
 
-  const hours = parseSimpleHours(
-    props.opening_hours
+  const distKm =
+    haversineKm(
+      center.lat,
+      center.lon,
+      lat,
+      lon
+    );
+
+  const name = String(
+    props.name || ""
+  ).trim();
+
+  /*
+   * Nunca usar address_line1 como nombre.
+   * Si Geoapify no dio nombre comercial,
+   * el resultado se descarta.
+   */
+  if (!name) {
+    return null;
+  }
+
+  const hours =
+    parseSimpleHours(
+      props.opening_hours
+    );
+
+  const distMin = Math.max(
+    1,
+    Math.round(
+      (distKm / 4.5) * 60
+    )
   );
 
-  const distMin =
-    distKm != null
-      ? Math.max(
-          1,
-          Math.round((distKm / 4.5) * 60)
-        )
-      : 10;
-
   return {
-    name: String(name).trim(),
+    name,
     emoji: emojiFor(categories),
     price: estimatePrice(categories),
     rating: 4.2,
     dist: distMin,
     mood: estimateMood(categories),
     outdoor: estimateOutdoor(categories),
-    kidFriendly: estimateKidFriendly(categories),
-    nightOnly: estimateNightOnly(categories),
+    kidFriendly:
+      estimateKidFriendly(categories),
+    nightOnly:
+      estimateNightOnly(categories),
     slots: estimateSlots(categories),
+
+    /*
+     * No mandamos una frase "Porque..."
+     * inventada desde la API.
+     */
     why: null,
+
     address: cleanAddress(props),
     hours,
     categories,
@@ -643,8 +742,10 @@ export default async function handler(
     return;
   }
 
-  const { city, intent } =
-    req.body || {};
+  const {
+    city,
+    intent,
+  } = req.body || {};
 
   if (
     !city ||
@@ -687,29 +788,49 @@ export default async function handler(
     const seen = new Set();
 
     const places = features
+      /*
+       * Primero: solamente lugares
+       * de la categoría solicitada.
+       */
       .filter((feature) =>
         featureMatchesIntent(
           feature,
           categories
         )
       )
+
+      /*
+       * Segundo: eliminar calles,
+       * barrios, ciudades y direcciones.
+       */
       .filter(
         (feature) =>
           !looksLikeOnlyAnAddress(
             feature
           )
       )
+
+      /*
+       * Tercero: convertir a nuestro
+       * formato de lugar.
+       */
       .map((feature) =>
         mapFeatureToVenue(
           feature,
           location
         )
       )
+
       .filter(Boolean)
+
+      /*
+       * No repetir lugares.
+       */
       .filter((place) => {
         const key =
-          `${place.name}|${place.address || ""}`
-            .toLowerCase();
+          `${place.name}|${
+            place.address || ""
+          }`.toLowerCase();
 
         if (seen.has(key)) {
           return false;
@@ -721,12 +842,19 @@ export default async function handler(
 
     res.status(200).json({
       city,
-      resolvedCity: location.label,
+      resolvedCity:
+        location.label,
       places,
     });
   } catch (err) {
+    console.error(
+      "Geoapify error:",
+      err
+    );
+
     res.status(502).json({
-      error: "geoapify-request-failed",
+      error:
+        "geoapify-request-failed",
     });
   }
                 }
