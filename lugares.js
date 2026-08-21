@@ -28,6 +28,20 @@
 /* - resolvedCity y address se devuelven TAL CUAL los entrega          */
 /*   Geoapify, sin ninguna transformación de capitalización, para     */
 /*   no alterar nombres propios ni tildes.                            */
+/*                                                                    */
+/* Cambios de ESTA corrección (bugs reportados en prueba real):       */
+/* - geocodeLocation ahora restringe la búsqueda a Argentina          */
+/*   (filter=countrycode:ar). Antes buscaba en el mundo entero, por   */
+/*   eso un texto mal escrito como "cordobs" podía resolver a una     */
+/*   ciudad de Brasil si ningún resultado argentino entraba entre     */
+/*   los primeros candidatos que devolvía Geoapify.                   */
+/* - searchPlaces ya NO usa el placeId del geocodificador para        */
+/*   encerrar la búsqueda dentro de ese polígono administrativo       */
+/*   exacto (filter=place:<id>). Ahora siempre busca por radio        */
+/*   (circle, 15km) alrededor del punto. Encerrarse en el polígono    */
+/*   podía limitar todos los resultados a un área chica (ej. solo     */
+/*   "Centro"), lo que explicaba que siempre aparecieran los mismos   */
+/*   lugares.                                                        */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
@@ -252,9 +266,14 @@ async function geocodeLocation(text) {
 
   if (!query) return null;
 
+  // Se restringe a Argentina (filter=countrycode:ar) para que un texto
+  // ambiguo o mal escrito (ej. "cordobs") no pueda resolver a un
+  // resultado de otro país cuando ningún candidato argentino entra
+  // entre los primeros que devuelve Geoapify.
   const url =
     "https://api.geoapify.com/v1/geocode/search" +
     `?text=${encodeURIComponent(query)}` +
+    "&filter=countrycode:ar" +
     "&limit=20" +
     "&format=json" +
     `&apiKey=${GEOAPIFY_KEY}`;
@@ -385,28 +404,21 @@ async function geocodeLocation(text) {
 async function searchPlaces({
   lat,
   lon,
-  placeId,
   categories,
   limit = 40,
 }) {
+  // Siempre se busca por radio (15km) alrededor del punto. Antes, si el
+  // geocodificador devolvía un placeId, la búsqueda quedaba encerrada
+  // dentro de ese polígono administrativo exacto (que podía ser un área
+  // chica, ej. solo "Centro"), lo que limitaba el pool de lugares
+  // disponibles y hacía que siempre aparecieran los mismos.
   const params = new URLSearchParams({
     categories: categories.join(","),
     limit: String(limit),
     bias: `proximity:${lon},${lat}`,
+    filter: `circle:${lon},${lat},15000`,
     apiKey: GEOAPIFY_KEY,
   });
-
-  if (placeId) {
-    params.set(
-      "filter",
-      `place:${placeId}`
-    );
-  } else {
-    params.set(
-      "filter",
-      `circle:${lon},${lat},15000`
-    );
-  }
 
   const url =
     `https://api.geoapify.com/v2/places?${params.toString()}`;
@@ -741,8 +753,6 @@ export default async function handler(
       await searchPlaces({
         lat: location.lat,
         lon: location.lon,
-        placeId:
-          location.placeId,
         categories,
       });
 
