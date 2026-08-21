@@ -2,15 +2,6 @@
 /* api/lugares.js                                                     */
 /*                                                                    */
 /* Busca lugares REALES con Geoapify.                                 */
-/*                                                                    */
-/* Reglas de esta versión:                                            */
-/* - La API key vive únicamente en Vercel: GEOAPIFY_API_KEY           */
-/* - Nunca inventa lugares.                                           */
-/* - Si no encuentra resultados devuelve places: [].                 */
-/* - Busca siempre dentro de un radio de 15 km.                       */
-/* - La geocodificación está restringida a Argentina.                 */
-/* - Descarta calles, barrios, ciudades y entidades geográficas      */
-/*   cuando Geoapify las devuelve como si fueran lugares.             */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
@@ -68,12 +59,57 @@ const INTENT_CATEGORIES = {
   ],
 };
 
+function normalizeIntent(intent) {
+  const value = String(intent || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  const aliases = {
+    comer: "comer",
+    comida: "comer",
+    cenar: "comer",
+    cena: "comer",
+    almorzar: "comer",
+
+    beber: "beber",
+    bebida: "beber",
+    tomar: "beber",
+    bar: "beber",
+    tragos: "beber",
+
+    cultura: "cultura",
+    cultural: "cultura",
+
+    paseo: "paseo",
+    pasear: "paseo",
+    caminar: "paseo",
+
+    aire_libre: "aire_libre",
+    "aire libre": "aire_libre",
+    naturaleza: "aire_libre",
+
+    fiesta: "fiesta",
+    boliche: "fiesta",
+    bailar: "fiesta",
+
+    familia: "familia",
+    familiar: "familia",
+    "con chicos": "familia",
+    "con ninos": "familia",
+
+    general: "general",
+  };
+
+  return aliases[value] || "general";
+}
+
 function estimatePrice(categories) {
   const cats = categories || [];
 
   if (cats.some((c) => c.includes("fast_food"))) return 1;
   if (cats.some((c) => c.includes("cafe"))) return 1;
-
   if (
     cats.some(
       (c) =>
@@ -158,7 +194,6 @@ function estimateKidFriendly(categories) {
 
 function estimateNightOnly(categories) {
   const cats = categories || [];
-
   return cats.some((c) => c.includes("nightclub"));
 }
 
@@ -169,13 +204,7 @@ function estimateSlots(categories) {
     return ["night"];
   }
 
-  if (
-    cats.some(
-      (c) =>
-        c.includes("bar") ||
-        c.includes("pub")
-    )
-  ) {
+  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) {
     return ["afternoon", "night"];
   }
 
@@ -188,43 +217,16 @@ function emojiFor(categories) {
   if (cats.some((c) => c.includes("fast_food"))) return "🍔";
   if (cats.some((c) => c.includes("restaurant"))) return "🍽️";
   if (cats.some((c) => c.includes("cafe"))) return "☕";
-
-  if (
-    cats.some(
-      (c) =>
-        c.includes("bar") ||
-        c.includes("pub")
-    )
-  ) {
-    return "🍺";
-  }
-
+  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return "🍺";
   if (cats.some((c) => c.includes("nightclub"))) return "🎉";
-
-  if (
-    cats.some(
-      (c) =>
-        c.includes("museum") ||
-        c.includes("culture")
-    )
-  ) {
+  if (cats.some((c) => c.includes("museum") || c.includes("culture"))) {
     return "🖼️";
   }
-
   if (cats.some((c) => c.includes("park"))) return "🌳";
-
-  if (
-    cats.some(
-      (c) =>
-        c.includes("natural") ||
-        c.includes("water")
-    )
-  ) {
+  if (cats.some((c) => c.includes("natural") || c.includes("water"))) {
     return "🌿";
   }
-
   if (cats.some((c) => c.includes("viewpoint"))) return "✨";
-
   if (
     cats.some(
       (c) =>
@@ -288,15 +290,9 @@ async function geocodeLocation(text) {
     const city = String(r.city || "").toLowerCase();
     const state = String(r.state || "").toLowerCase();
     const suburb = String(r.suburb || "").toLowerCase();
-    const neighbourhood = String(
-      r.neighbourhood || ""
-    ).toLowerCase();
-    const district = String(
-      r.district || ""
-    ).toLowerCase();
-    const formatted = String(
-      r.formatted || ""
-    ).toLowerCase();
+    const neighbourhood = String(r.neighbourhood || "").toLowerCase();
+    const district = String(r.district || "").toLowerCase();
+    const formatted = String(r.formatted || "").toLowerCase();
 
     const hay = [
       name,
@@ -309,20 +305,13 @@ async function geocodeLocation(text) {
     ];
 
     const hayNorm = hay.map((v) =>
-      v
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
+      v.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     );
 
     let s = 0;
 
-    // Para ubicaciones de Córdoba, preferimos
-    // resultados que estén realmente en Córdoba.
-    if (
-      hayNorm.some((v) =>
-        v.includes("cordoba")
-      )
-    ) {
+    // Preferimos resultados de Córdoba.
+    if (hayNorm.some((v) => v.includes("cordoba"))) {
       s += 100;
     }
 
@@ -330,11 +319,7 @@ async function geocodeLocation(text) {
       s += 80;
     }
 
-    if (
-      hayNorm.some(
-        (v) => v === wantedNorm
-      )
-    ) {
+    if (hayNorm.some((v) => v === wantedNorm)) {
       s += 80;
     }
 
@@ -346,21 +331,13 @@ async function geocodeLocation(text) {
       s += 60;
     }
 
-    if (city === wanted) {
-      s += 50;
-    }
-
-    if (name === wanted) {
-      s += 45;
-    }
+    if (city === wanted) s += 50;
+    if (name === wanted) s += 45;
 
     if (formatted.includes(wanted)) {
       s += 20;
     }
 
-    // Preferimos resultados que representan
-    // barrios/localidades antes que calles o POIs
-    // para resolver la ubicación del usuario.
     const resultType = String(
       r.result_type || ""
     ).toLowerCase();
@@ -414,8 +391,13 @@ async function searchPlaces({
   const params = new URLSearchParams({
     categories: categories.join(","),
     limit: String(limit),
+
+    // Punto de referencia para ordenar los resultados.
     bias: `proximity:${lon},${lat}`,
+
+    // SIEMPRE 15 km alrededor del punto.
     filter: `circle:${lon},${lat},15000`,
+
     apiKey: GEOAPIFY_KEY,
   });
 
@@ -435,12 +417,7 @@ async function searchPlaces({
     : [];
 }
 
-function haversineKm(
-  lat1,
-  lon1,
-  lat2,
-  lon2
-) {
+function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
 
   const dLat =
@@ -513,9 +490,7 @@ function featureMatchesIntent(
       ? feature.properties
       : {};
 
-  const categories = Array.isArray(
-    props.categories
-  )
+  const categories = Array.isArray(props.categories)
     ? props.categories
     : [];
 
@@ -523,9 +498,7 @@ function featureMatchesIntent(
     allowedCategories.some(
       (allowed) =>
         actual === allowed ||
-        actual.startsWith(
-          `${allowed}.`
-        )
+        actual.startsWith(`${allowed}.`)
     )
   );
 }
@@ -544,75 +517,23 @@ function looksLikeOnlyAnAddress(feature) {
     props.address_line1 || ""
   ).trim();
 
-  const resultType = String(
-    props.result_type || ""
-  ).toLowerCase();
-
-  const categories = Array.isArray(
-    props.categories
-  )
-    ? props.categories
-    : [];
-
   if (!name) return true;
 
   if (/^\d{1,6}$/.test(name)) {
     return true;
   }
 
-  // Nunca convertir calles, barrios, ciudades
-  // u otras entidades geográficas en lugares.
-  const geographicTypes = [
-    "street",
-    "road",
-    "district",
-    "suburb",
-    "neighbourhood",
-    "neighborhood",
-    "city",
-    "locality",
-    "county",
-    "state",
-    "country",
-    "postcode",
-    "municipality",
-  ];
-
   if (
-    geographicTypes.some((type) =>
-      resultType.includes(type)
+    name === address &&
+    !props.categories?.some(
+      (c) =>
+        String(c).startsWith("catering.") ||
+        String(c).startsWith("entertainment.") ||
+        String(c).startsWith("leisure.") ||
+        String(c).startsWith("tourism.")
     )
   ) {
     return true;
-  }
-
-  // Si el nombre es solamente una dirección,
-  // descartarlo salvo que tenga una categoría
-  // claramente correspondiente a un lugar.
-  if (name === address) {
-    const hasVenueCategory =
-      categories.some(
-        (c) =>
-          String(c).startsWith(
-            "catering."
-          ) ||
-          String(c).startsWith(
-            "entertainment."
-          ) ||
-          String(c).startsWith(
-            "leisure."
-          ) ||
-          String(c).startsWith(
-            "tourism."
-          ) ||
-          String(c).startsWith(
-            "natural."
-          )
-      );
-
-    if (!hasVenueCategory) {
-      return true;
-    }
   }
 
   return false;
@@ -622,19 +543,17 @@ function mapFeatureToVenue(
   feature,
   center
 ) {
-  const props =
-    feature.properties || {};
+  const props = feature.properties || {};
 
-  const categories =
-    Array.isArray(props.categories)
-      ? props.categories
-      : [];
+  const categories = Array.isArray(
+    props.categories
+  )
+    ? props.categories
+    : [];
 
   const coords =
     feature.geometry &&
-    Array.isArray(
-      feature.geometry.coordinates
-    )
+    Array.isArray(feature.geometry.coordinates)
       ? feature.geometry.coordinates
       : [null, null];
 
@@ -655,17 +574,13 @@ function mapFeatureToVenue(
     props.name ||
     props.address_line1;
 
-  if (
-    !name ||
-    !String(name).trim()
-  ) {
+  if (!name || !String(name).trim()) {
     return null;
   }
 
-  const hours =
-    parseSimpleHours(
-      props.opening_hours
-    );
+  const hours = parseSimpleHours(
+    props.opening_hours
+  );
 
   const distMin =
     distKm != null
@@ -686,13 +601,9 @@ function mapFeatureToVenue(
     mood: estimateMood(categories),
     outdoor: estimateOutdoor(categories),
     kidFriendly:
-      estimateKidFriendly(
-        categories
-      ),
+      estimateKidFriendly(categories),
     nightOnly:
-      estimateNightOnly(
-        categories
-      ),
+      estimateNightOnly(categories),
     slots: estimateSlots(categories),
     why: null,
     address: cleanAddress(props),
@@ -720,10 +631,8 @@ export default async function handler(
     return;
   }
 
-  const {
-    city,
-    intent,
-  } = req.body || {};
+  const { city, intent } =
+    req.body || {};
 
   if (
     !city ||
@@ -736,9 +645,13 @@ export default async function handler(
     return;
   }
 
+  const normalizedIntent =
+    normalizeIntent(intent);
+
   const categories =
-    INTENT_CATEGORIES[intent] ||
-    INTENT_CATEGORIES.general;
+    INTENT_CATEGORIES[
+      normalizedIntent
+    ] || INTENT_CATEGORIES.general;
 
   try {
     const location =
@@ -752,6 +665,7 @@ export default async function handler(
         resolvedCity: null,
         places: [],
       });
+
       return;
     }
 
@@ -805,9 +719,14 @@ export default async function handler(
       places,
     });
   } catch (err) {
+    console.error(
+      "Geoapify error:",
+      err
+    );
+
     res.status(502).json({
       error:
         "geoapify-request-failed",
     });
   }
-}
+    }
