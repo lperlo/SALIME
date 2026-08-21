@@ -1,16 +1,33 @@
-
 /* ------------------------------------------------------------------ */
-/* api/lugares.js */
-/* */
-/* Busca lugares REALES con Geoapify. */
-/* */
-/* Reglas de la versión final: */
-/* - La API key vive únicamente en Vercel: GEOAPIFY_API_KEY */
-/* - Nunca inventa lugares. */
-/* - Si no encuentra resultados devuelve places: []. */
-/* - Respeta ciudad/barrio usando el place_id del geocodificador */
-/* cuando Geoapify lo proporciona. */
-/* - No depende de api/interpretar.js. */
+/* api/lugares.js                                                     */
+/*                                                                    */
+/* Busca lugares REALES con Geoapify.                                 */
+/*                                                                    */
+/* Reglas de la versión final:                                       */
+/* - La API key vive únicamente en Vercel: GEOAPIFY_API_KEY           */
+/* - Nunca inventa lugares.                                          */
+/* - Si no encuentra resultados devuelve places: [].                 */
+/* - Respeta ciudad/barrio usando el place_id del geocodificador      */
+/*   cuando Geoapify lo proporciona.                                  */
+/* - No depende de api/interpretar.js.                                */
+/*                                                                    */
+/* Cambios de esta versión:                                          */
+/* - El intent se normaliza (trim/lowercase/sin tildes) antes de      */
+/*   buscarse en INTENT_CATEGORIES, para que nunca caiga             */
+/*   silenciosamente en "general" por una variante de mayúsculas/    */
+/*   tildes/espacios. Esto evita que categorías ajenas a la          */
+/*   intención (ej. leisure.park en una búsqueda de "comer") se      */
+/*   cuelen en los resultados.                                       */
+/* - Se agrega un segundo filtro por "familia" de categoría           */
+/*   (catering / entertainment / leisure / tourism / natural) como   */
+/*   defensa adicional: un feature solo pasa si TODAS sus            */
+/*   categorías pertenecen a la familia permitida para la            */
+/*   intención. Es general, no depende de nombres de lugares.        */
+/* - Se acepta un array opcional "exclude" en el body para que        */
+/*   "Sorpréndeme de nuevo" no repita lugares ya mostrados.          */
+/* - resolvedCity y address se devuelven TAL CUAL los entrega          */
+/*   Geoapify, sin ninguna transformación de capitalización, para     */
+/*   no alterar nombres propios ni tildes.                            */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
@@ -60,6 +77,37 @@ const INTENT_CATEGORIES = {
     "leisure.park",
   ],
 };
+
+/* ------------------------------------------------------------------ */
+/* Familias de categoría permitidas por intención.                    */
+/*                                                                    */
+/* Un feature solo se acepta si TODAS sus categorías Geoapify         */
+/* pertenecen a alguna de estas familias (primer segmento antes del   */
+/* primer punto, ej. "leisure.park" -> "leisure").                    */
+/*                                                                    */
+/* Esto es una defensa general (no una lista negra de nombres): evita */
+/* que, por ejemplo, una plaza (leisure.*) aparezca como resultado    */
+/* cuando la intención es "comer" (catering.*), sin importar por qué  */
+/* haya llegado ese feature hasta acá.                                */
+/* ------------------------------------------------------------------ */
+const INTENT_FAMILY = {
+  comer: ["catering"],
+  beber: ["catering"],
+  cultura: ["entertainment"],
+  paseo: ["leisure", "tourism", "natural"],
+  aire_libre: ["leisure", "natural"],
+  fiesta: ["entertainment", "catering"],
+  familia: ["leisure", "entertainment", "catering"],
+  general: ["catering", "entertainment", "leisure", "tourism", "natural"],
+};
+
+function normalizeIntent(raw) {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
 
 function estimatePrice(categories) {
   const cats = categories || [];
@@ -469,6 +517,44 @@ function featureMatchesIntent(
   );
 }
 
+/**
+ * Defensa adicional: exige que TODAS las categorías del feature
+ * pertenezcan a la "familia" de categorías permitida para la
+ * intención (catering / entertainment / leisure / tourism / natural).
+ * Es general y no depende de nombres de lugares: evita que, por
+ * ejemplo, una plaza (leisure.*) se cuele en resultados de "comer"
+ * (catering.*) sin importar cómo haya llegado ese feature hasta acá.
+ */
+function featureBelongsToFamily(
+  feature,
+  normalizedIntent
+) {
+  const allowedFamilies =
+    INTENT_FAMILY[normalizedIntent] ||
+    INTENT_FAMILY.general;
+
+  const props =
+    feature && feature.properties
+      ? feature.properties
+      : {};
+
+  const categories = Array.isArray(
+    props.categories
+  )
+    ? props.categories
+    : [];
+
+  if (categories.length === 0) {
+    return false;
+  }
+
+  return categories.every((c) =>
+    allowedFamilies.includes(
+      String(c).split(".")[0]
+    )
+  );
+}
+
 function looksLikeOnlyAnAddress(feature) {
   const props =
     feature && feature.properties
@@ -609,6 +695,7 @@ export default async function handler(
   const {
     city,
     intent,
+    exclude,
   } = req.body || {};
 
   if (
@@ -622,9 +709,18 @@ export default async function handler(
     return;
   }
 
+  const normalizedIntent =
+    normalizeIntent(intent);
+
   const categories =
-    INTENT_CATEGORIES[intent] ||
+    INTENT_CATEGORIES[normalizedIntent] ||
     INTENT_CATEGORIES.general;
+
+  const excludeSet = new Set(
+    (Array.isArray(exclude) ? exclude : []).map(
+      (k) => String(k).toLowerCase()
+    )
+  );
 
   try {
     const location =
@@ -659,6 +755,12 @@ export default async function handler(
           categories
         )
       )
+      .filter((feature) =>
+        featureBelongsToFamily(
+          feature,
+          normalizedIntent
+        )
+      )
       .filter(
         (feature) =>
           !looksLikeOnlyAnAddress(
@@ -684,6 +786,14 @@ export default async function handler(
 
         seen.add(key);
         return true;
+      })
+      .filter((place) => {
+        const key =
+          `${place.name}|${
+            place.address || ""
+          }`.toLowerCase();
+
+        return !excludeSet.has(key);
       });
 
     res.status(200).json({
