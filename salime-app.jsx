@@ -42,11 +42,11 @@ function normalizeLocation(value) {
   const clean = normalizeText(value).trim();
 
   const known = {
-    cordoba: "Córdoba, Córdoba, Argentina",
-    "nueva cordoba": "Nueva Córdoba, Córdoba, Argentina",
-    guemes: "Güemes, Córdoba, Córdoba, Argentina",
-    "alta cordoba": "Alta Córdoba, Córdoba, Argentina",
-    centro: "Centro, Córdoba, Córdoba, Argentina",
+    cordoba: "Córdoba",
+    "nueva cordoba": "Nueva Córdoba",
+    guemes: "Güemes",
+    "alta cordoba": "Alta Córdoba",
+    centro: "Centro",
   };
 
   if (known[clean]) return known[clean];
@@ -73,7 +73,10 @@ const VIBE_INTENT = {
   "Tomar algo": "beber",
   Paseo: "paseo",
   Cultura: "cultura",
+  "Aire libre": "aire_libre",
   Fiesta: "fiesta",
+  Familiar: "familia",
+  "Lo que salga": "general",
 };
 
 /* ------------------------------------------------------------------ */
@@ -742,16 +745,16 @@ const CIERRE_FAMILIA = [
  * que aunque cambie el contenido de los pools esto sigue funcionando.
  */
 const POOL_KEYS = new Map([
-  [CENA, "CENA"],
-  [BEBIDA, "BEBIDA"],
-  [FINAL, "FINAL"],
-  [CULTURA, "CULTURA"],
-  [PASEO, "PASEO"],
-  [AIRE_LIBRE, "AIRE_LIBRE"],
-  [FIESTA, "FIESTA"],
-  [ACTIVIDAD_FAMILIA, "ACTIVIDAD_FAMILIA"],
-  [MERIENDA_FAMILIA, "MERIENDA_FAMILIA"],
-  [CIERRE_FAMILIA, "CIERRE_FAMILIA"],
+  [CENA, "comer"],
+  [BEBIDA, "beber"],
+  [FINAL, "beber"],
+  [CULTURA, "cultura"],
+  [PASEO, "paseo"],
+  [AIRE_LIBRE, "aire_libre"],
+  [FIESTA, "fiesta"],
+  [ACTIVIDAD_FAMILIA, "familia"],
+  [MERIENDA_FAMILIA, "comer"],
+  [CIERRE_FAMILIA, "comer"],
 ]);
 
 /*
@@ -783,34 +786,6 @@ async function fetchRealPool(poolKey, city) {
  * las categorías que realmente hacen falta en este plan, y solo si
  * Geoapify encontró algo.
  */
-
-function isLikelyStreetOnlyPlace(place) {
-  const name = normalizeText(place?.name || "");
-  const address = normalizeText(place?.address || "");
-
-  if (!name) return true;
-
-  // Never accept a result whose name is effectively just a street/avenue/plaza.
-  const streetWords =
-    /\b(avenida|av|calle|street|bulevar|boulevard|ruta|camino|pasaje|peatonal|plaza)\b/;
-
-  if (streetWords.test(name) && !place?.category) return true;
-
-  // A place whose name is only a number/address is not a venue.
-  if (/^\d+[\s,.-]/.test(name)) return true;
-
-  // Avoid obvious cross-city results when the requested context is Córdoba.
-  if (
-    address &&
-    /\b(torzalito|salta|jujuy|tucuman|santa fe)\b/.test(address) &&
-    /\bcordoba\b/.test(address) === false
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
 async function fetchPoolOverrides(steps, city) {
   if (!city) return {};
 
@@ -834,12 +809,8 @@ async function fetchPoolOverrides(steps, city) {
   const overrides = {};
 
   for (const [key, places] of results) {
-    const cleanPlaces = places.filter(
-      (place) => !isLikelyStreetOnlyPlace(place)
-    );
-
-    if (cleanPlaces.length > 0) {
-      overrides[key] = cleanPlaces;
+    if (places.length > 0) {
+      overrides[key] = places;
     }
   }
 
@@ -1041,16 +1012,16 @@ const STEPS_COMER = [
     pool: CENA,
   },
   {
-    key: "beber",
+    key: "postre",
     label: "SEGUIR",
     time: "22:00",
-    pool: BEBIDA,
+    pool: FINAL,
   },
   {
-    key: "final",
+    key: "paseo",
     label: "PARA TERMINAR",
     time: "23:00",
-    pool: FINAL,
+    pool: PASEO,
   },
 ];
 
@@ -1632,10 +1603,10 @@ function getSteps({
           pool: MERIENDA_FAMILIA,
         },
         {
-          key: "final",
+          key: "paseo",
           label: "PARA TERMINAR",
           time: "13:30",
-          pool: FINAL,
+          pool: PASEO,
         },
       ];
     }
@@ -1657,10 +1628,10 @@ function getSteps({
           pool: MERIENDA_FAMILIA,
         },
         {
-          key: "final",
+          key: "paseo",
           label: "PARA TERMINAR",
           time: "20:00",
-          pool: FINAL,
+          pool: PASEO,
         },
       ];
     }
@@ -1760,7 +1731,9 @@ async function generatePlan({
    * para alguna categoría, esa categoría sigue usando su pool mock
    * de siempre (nunca se inventan lugares).
    */
-  const poolOverrides = await fetchPoolOverrides(steps, location);
+  const poolOverrides = !random
+    ? await fetchPoolOverrides(steps, location)
+    : {};
 
   const allowNightOnly =
     random ||
@@ -1789,8 +1762,10 @@ async function generatePlan({
     const poolKey = POOL_KEYS.get(step.pool);
 
     const activePool =
-      poolKey && poolOverrides[poolKey]
-        ? poolOverrides[poolKey]
+      location && !random
+        ? (poolKey && poolOverrides[poolKey]
+            ? poolOverrides[poolKey]
+            : [])
         : step.pool;
 
     const venue = pick(activePool, {
@@ -1812,18 +1787,20 @@ async function generatePlan({
     /*
      * Salvaguarda por si un pool se queda sin opciones.
      */
-    const safeVenue =
-      venue ||
-      activePool[0];
+    if (!venue) {
+      return {
+        ...step,
+        time,
+        venue: null,
+      };
+    }
 
-    usedNames.push(
-      safeVenue.name
-    );
+    usedNames.push(venue.name);
 
     return {
       ...step,
       time,
-      venue: safeVenue,
+      venue,
     };
   });
 }
@@ -1959,6 +1936,7 @@ function HomeScreen({
       budget: null,
       people: null,
       vibe: null,
+      moment: null,
     });
 
   const understood =
@@ -2126,6 +2104,24 @@ function HomeScreen({
 
       let daytimeGeneric =
         !!interpreted.daytimeGeneric;
+
+      // La selección manual de momento tiene prioridad sobre el texto.
+      if (filters.moment === "Día") {
+        morning = false;
+        afternoon = false;
+        night = false;
+        daytimeGeneric = true;
+      } else if (filters.moment === "Tarde") {
+        morning = false;
+        afternoon = true;
+        night = false;
+        daytimeGeneric = false;
+      } else if (filters.moment === "Noche") {
+        morning = false;
+        afternoon = false;
+        night = true;
+        daytimeGeneric = false;
+      }
 
       const explicitHour =
         interpreted.explicitHour;
@@ -2396,6 +2392,36 @@ function HomeScreen({
         />
       </div>
 
+      <div className="filter-section">
+        <div className="filter-title">¿Qué tipo de plan querés?</div>
+        <div className="choice-row">
+          {["Comer", "Tomar algo", "Cultura", "Paseo", "Aire libre", "Fiesta", "Familiar", "Lo que salga"].map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`choice-btn ${filters.vibe === option ? "choice-btn--active" : ""}`}
+              onClick={() => setFilters((f) => ({ ...f, vibe: f.vibe === option ? null : option }))}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+
+        <div className="filter-title">¿Cuándo?</div>
+        <div className="choice-row">
+          {["Día", "Tarde", "Noche"].map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`choice-btn ${filters.moment === option ? "choice-btn--active" : ""}`}
+              onClick={() => setFilters((f) => ({ ...f, moment: f.moment === option ? null : option }))}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="cta-stack">
         <button
           className="btn btn--primary"
@@ -2428,7 +2454,9 @@ function Timeline({
 }) {
   return (
     <div className="timeline">
-      {plan.map(
+      {plan
+        .filter((step) => step && step.venue)
+        .map(
         (step, i) => (
           <div
             className="tl-row"
@@ -2499,15 +2527,11 @@ function Timeline({
                   )}
                 </div>
 
-                <p className="tl-card-why">
-                  Porque{" "}
-                  {
-                    step
-                      .venue
-                      .why
-                  }
-                  .
-                </p>
+                {step.venue.address && (
+                  <div className="tl-card-address">
+                    📍 {step.venue.address}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -3380,6 +3404,47 @@ export default function App() {
 
         .chip__icon {
           flex-shrink: 0;
+          color: ${C.ink};
+        }
+
+        .filter-section {
+          margin: 0 0 24px;
+        }
+
+        .filter-title {
+          font-size: 13px;
+          font-weight: 700;
+          color: ${C.ink};
+          margin: 14px 0 8px;
+        }
+
+        .choice-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .choice-btn {
+          border: 1px solid ${C.inkBorder};
+          background: #FFFDF8;
+          color: ${C.ink};
+          border-radius: 18px;
+          padding: 10px 13px;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
+        .choice-btn--active {
+          background: ${C.lavender};
+          border-color: ${C.inkLine};
+        }
+
+        .tl-card-address {
+          margin-top: 8px;
+          font-size: 12.5px;
+          line-height: 1.4;
           color: ${C.ink};
         }
 
