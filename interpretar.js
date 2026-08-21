@@ -330,6 +330,7 @@ export default async function handler(req, res) {
       .trim();
 
     const parsed = JSON.parse(clean);
+    console.log("DEBUG:", JSON.stringify(parsed));
 
     // ---------------------------------------------------------------
     // Normalización final del contrato
