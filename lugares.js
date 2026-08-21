@@ -3,45 +3,14 @@
 /*                                                                    */
 /* Busca lugares REALES con Geoapify.                                 */
 /*                                                                    */
-/* Reglas de la versión final:                                       */
+/* Reglas de esta versión:                                            */
 /* - La API key vive únicamente en Vercel: GEOAPIFY_API_KEY           */
-/* - Nunca inventa lugares.                                          */
+/* - Nunca inventa lugares.                                           */
 /* - Si no encuentra resultados devuelve places: [].                 */
-/* - Respeta ciudad/barrio usando el place_id del geocodificador      */
-/*   cuando Geoapify lo proporciona.                                  */
-/* - No depende de api/interpretar.js.                                */
-/*                                                                    */
-/* Cambios de esta versión:                                          */
-/* - El intent se normaliza (trim/lowercase/sin tildes) antes de      */
-/*   buscarse en INTENT_CATEGORIES, para que nunca caiga             */
-/*   silenciosamente en "general" por una variante de mayúsculas/    */
-/*   tildes/espacios. Esto evita que categorías ajenas a la          */
-/*   intención (ej. leisure.park en una búsqueda de "comer") se      */
-/*   cuelen en los resultados.                                       */
-/* - Se agrega un segundo filtro por "familia" de categoría           */
-/*   (catering / entertainment / leisure / tourism / natural) como   */
-/*   defensa adicional: un feature solo pasa si TODAS sus            */
-/*   categorías pertenecen a la familia permitida para la            */
-/*   intención. Es general, no depende de nombres de lugares.        */
-/* - Se acepta un array opcional "exclude" en el body para que        */
-/*   "Sorpréndeme de nuevo" no repita lugares ya mostrados.          */
-/* - resolvedCity y address se devuelven TAL CUAL los entrega          */
-/*   Geoapify, sin ninguna transformación de capitalización, para     */
-/*   no alterar nombres propios ni tildes.                            */
-/*                                                                    */
-/* Cambios de ESTA corrección (bugs reportados en prueba real):       */
-/* - geocodeLocation ahora restringe la búsqueda a Argentina          */
-/*   (filter=countrycode:ar). Antes buscaba en el mundo entero, por   */
-/*   eso un texto mal escrito como "cordobs" podía resolver a una     */
-/*   ciudad de Brasil si ningún resultado argentino entraba entre     */
-/*   los primeros candidatos que devolvía Geoapify.                   */
-/* - searchPlaces ya NO usa el placeId del geocodificador para        */
-/*   encerrar la búsqueda dentro de ese polígono administrativo       */
-/*   exacto (filter=place:<id>). Ahora siempre busca por radio        */
-/*   (circle, 15km) alrededor del punto. Encerrarse en el polígono    */
-/*   podía limitar todos los resultados a un área chica (ej. solo     */
-/*   "Centro"), lo que explicaba que siempre aparecieran los mismos   */
-/*   lugares.                                                        */
+/* - Busca siempre dentro de un radio de 15 km.                       */
+/* - La geocodificación está restringida a Argentina.                 */
+/* - Descarta calles, barrios, ciudades y entidades geográficas      */
+/*   cuando Geoapify las devuelve como si fueran lugares.             */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
@@ -52,38 +21,45 @@ const INTENT_CATEGORIES = {
     "catering.fast_food",
     "catering.food_court",
   ],
+
   beber: [
     "catering.cafe",
     "catering.bar",
     "catering.pub",
   ],
+
   cultura: [
     "entertainment.museum",
     "entertainment.culture.gallery",
     "entertainment.culture.theatre",
     "entertainment.culture.arts_centre",
   ],
+
   paseo: [
     "leisure.park",
     "tourism.attraction.viewpoint",
     "natural",
   ],
+
   aire_libre: [
     "leisure.park",
     "natural",
     "natural.water",
   ],
+
   fiesta: [
     "entertainment.nightclub",
     "catering.bar",
     "catering.pub",
   ],
+
   familia: [
     "leisure.playground",
     "entertainment.activity_park",
     "entertainment.museum",
     "catering.restaurant",
   ],
+
   general: [
     "catering.restaurant",
     "catering.cafe",
@@ -92,42 +68,12 @@ const INTENT_CATEGORIES = {
   ],
 };
 
-/* ------------------------------------------------------------------ */
-/* Familias de categoría permitidas por intención.                    */
-/*                                                                    */
-/* Un feature solo se acepta si TODAS sus categorías Geoapify         */
-/* pertenecen a alguna de estas familias (primer segmento antes del   */
-/* primer punto, ej. "leisure.park" -> "leisure").                    */
-/*                                                                    */
-/* Esto es una defensa general (no una lista negra de nombres): evita */
-/* que, por ejemplo, una plaza (leisure.*) aparezca como resultado    */
-/* cuando la intención es "comer" (catering.*), sin importar por qué  */
-/* haya llegado ese feature hasta acá.                                */
-/* ------------------------------------------------------------------ */
-const INTENT_FAMILY = {
-  comer: ["catering"],
-  beber: ["catering"],
-  cultura: ["entertainment"],
-  paseo: ["leisure", "tourism", "natural"],
-  aire_libre: ["leisure", "natural"],
-  fiesta: ["entertainment", "catering"],
-  familia: ["leisure", "entertainment", "catering"],
-  general: ["catering", "entertainment", "leisure", "tourism", "natural"],
-};
-
-function normalizeIntent(raw) {
-  return String(raw || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
 function estimatePrice(categories) {
   const cats = categories || [];
 
   if (cats.some((c) => c.includes("fast_food"))) return 1;
   if (cats.some((c) => c.includes("cafe"))) return 1;
+
   if (
     cats.some(
       (c) =>
@@ -135,10 +81,15 @@ function estimatePrice(categories) {
         c.includes("park") ||
         c.includes("natural")
     )
-  )
+  ) {
     return 1;
+  }
+
   if (cats.some((c) => c.includes("nightclub"))) return 3;
-  if (cats.some((c) => c.includes("museum") || c.includes("culture"))) return 2;
+  if (cats.some((c) => c.includes("museum") || c.includes("culture"))) {
+    return 2;
+  }
+
   if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return 2;
   if (cats.some((c) => c.includes("restaurant"))) return 2;
 
@@ -218,7 +169,13 @@ function estimateSlots(categories) {
     return ["night"];
   }
 
-  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) {
+  if (
+    cats.some(
+      (c) =>
+        c.includes("bar") ||
+        c.includes("pub")
+    )
+  ) {
     return ["afternoon", "night"];
   }
 
@@ -231,20 +188,52 @@ function emojiFor(categories) {
   if (cats.some((c) => c.includes("fast_food"))) return "🍔";
   if (cats.some((c) => c.includes("restaurant"))) return "🍽️";
   if (cats.some((c) => c.includes("cafe"))) return "☕";
-  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return "🍺";
+
+  if (
+    cats.some(
+      (c) =>
+        c.includes("bar") ||
+        c.includes("pub")
+    )
+  ) {
+    return "🍺";
+  }
+
   if (cats.some((c) => c.includes("nightclub"))) return "🎉";
-  if (cats.some((c) => c.includes("museum") || c.includes("culture"))) return "🖼️";
+
+  if (
+    cats.some(
+      (c) =>
+        c.includes("museum") ||
+        c.includes("culture")
+    )
+  ) {
+    return "🖼️";
+  }
+
   if (cats.some((c) => c.includes("park"))) return "🌳";
-  if (cats.some((c) => c.includes("natural") || c.includes("water"))) return "🌿";
+
+  if (
+    cats.some(
+      (c) =>
+        c.includes("natural") ||
+        c.includes("water")
+    )
+  ) {
+    return "🌿";
+  }
+
   if (cats.some((c) => c.includes("viewpoint"))) return "✨";
+
   if (
     cats.some(
       (c) =>
         c.includes("playground") ||
         c.includes("activity_park")
     )
-  )
+  ) {
     return "🎡";
+  }
 
   return "📍";
 }
@@ -266,10 +255,6 @@ async function geocodeLocation(text) {
 
   if (!query) return null;
 
-  // Se restringe a Argentina (filter=countrycode:ar) para que un texto
-  // ambiguo o mal escrito (ej. "cordobs") no pueda resolver a un
-  // resultado de otro país cuando ningún candidato argentino entra
-  // entre los primeros que devuelve Geoapify.
   const url =
     "https://api.geoapify.com/v1/geocode/search" +
     `?text=${encodeURIComponent(query)}` +
@@ -285,6 +270,7 @@ async function geocodeLocation(text) {
   }
 
   const data = await res.json();
+
   const results = Array.isArray(data.results)
     ? data.results
     : [];
@@ -302,9 +288,15 @@ async function geocodeLocation(text) {
     const city = String(r.city || "").toLowerCase();
     const state = String(r.state || "").toLowerCase();
     const suburb = String(r.suburb || "").toLowerCase();
-    const neighbourhood = String(r.neighbourhood || "").toLowerCase();
-    const district = String(r.district || "").toLowerCase();
-    const formatted = String(r.formatted || "").toLowerCase();
+    const neighbourhood = String(
+      r.neighbourhood || ""
+    ).toLowerCase();
+    const district = String(
+      r.district || ""
+    ).toLowerCase();
+    const formatted = String(
+      r.formatted || ""
+    ).toLowerCase();
 
     const hay = [
       name,
@@ -324,8 +316,13 @@ async function geocodeLocation(text) {
 
     let s = 0;
 
-    // Para barrios de Córdoba, priorizar fuertemente resultados de Córdoba.
-    if (hayNorm.some((v) => v.includes("cordoba"))) {
+    // Para ubicaciones de Córdoba, preferimos
+    // resultados que estén realmente en Córdoba.
+    if (
+      hayNorm.some((v) =>
+        v.includes("cordoba")
+      )
+    ) {
       s += 100;
     }
 
@@ -333,7 +330,11 @@ async function geocodeLocation(text) {
       s += 80;
     }
 
-    if (hayNorm.some((v) => v === wantedNorm)) {
+    if (
+      hayNorm.some(
+        (v) => v === wantedNorm
+      )
+    ) {
       s += 80;
     }
 
@@ -357,6 +358,9 @@ async function geocodeLocation(text) {
       s += 20;
     }
 
+    // Preferimos resultados que representan
+    // barrios/localidades antes que calles o POIs
+    // para resolver la ubicación del usuario.
     const resultType = String(
       r.result_type || ""
     ).toLowerCase();
@@ -407,11 +411,6 @@ async function searchPlaces({
   categories,
   limit = 40,
 }) {
-  // Siempre se busca por radio (15km) alrededor del punto. Antes, si el
-  // geocodificador devolvía un placeId, la búsqueda quedaba encerrada
-  // dentro de ese polígono administrativo exacto (que podía ser un área
-  // chica, ej. solo "Centro"), lo que limitaba el pool de lugares
-  // disponibles y hacía que siempre aparecieran los mismos.
   const params = new URLSearchParams({
     categories: categories.join(","),
     limit: String(limit),
@@ -524,45 +523,9 @@ function featureMatchesIntent(
     allowedCategories.some(
       (allowed) =>
         actual === allowed ||
-        actual.startsWith(`${allowed}.`)
-    )
-  );
-}
-
-/**
- * Defensa adicional: exige que TODAS las categorías del feature
- * pertenezcan a la "familia" de categorías permitida para la
- * intención (catering / entertainment / leisure / tourism / natural).
- * Es general y no depende de nombres de lugares: evita que, por
- * ejemplo, una plaza (leisure.*) se cuele en resultados de "comer"
- * (catering.*) sin importar cómo haya llegado ese feature hasta acá.
- */
-function featureBelongsToFamily(
-  feature,
-  normalizedIntent
-) {
-  const allowedFamilies =
-    INTENT_FAMILY[normalizedIntent] ||
-    INTENT_FAMILY.general;
-
-  const props =
-    feature && feature.properties
-      ? feature.properties
-      : {};
-
-  const categories = Array.isArray(
-    props.categories
-  )
-    ? props.categories
-    : [];
-
-  if (categories.length === 0) {
-    return false;
-  }
-
-  return categories.every((c) =>
-    allowedFamilies.includes(
-      String(c).split(".")[0]
+        actual.startsWith(
+          `${allowed}.`
+        )
     )
   );
 }
@@ -581,22 +544,75 @@ function looksLikeOnlyAnAddress(feature) {
     props.address_line1 || ""
   ).trim();
 
+  const resultType = String(
+    props.result_type || ""
+  ).toLowerCase();
+
+  const categories = Array.isArray(
+    props.categories
+  )
+    ? props.categories
+    : [];
+
   if (!name) return true;
 
   if (/^\d{1,6}$/.test(name)) {
     return true;
   }
 
+  // Nunca convertir calles, barrios, ciudades
+  // u otras entidades geográficas en lugares.
+  const geographicTypes = [
+    "street",
+    "road",
+    "district",
+    "suburb",
+    "neighbourhood",
+    "neighborhood",
+    "city",
+    "locality",
+    "county",
+    "state",
+    "country",
+    "postcode",
+    "municipality",
+  ];
+
   if (
-    name === address &&
-    !props.categories?.some((c) =>
-      String(c).startsWith("catering.") ||
-      String(c).startsWith("entertainment.") ||
-      String(c).startsWith("leisure.") ||
-      String(c).startsWith("tourism.")
+    geographicTypes.some((type) =>
+      resultType.includes(type)
     )
   ) {
     return true;
+  }
+
+  // Si el nombre es solamente una dirección,
+  // descartarlo salvo que tenga una categoría
+  // claramente correspondiente a un lugar.
+  if (name === address) {
+    const hasVenueCategory =
+      categories.some(
+        (c) =>
+          String(c).startsWith(
+            "catering."
+          ) ||
+          String(c).startsWith(
+            "entertainment."
+          ) ||
+          String(c).startsWith(
+            "leisure."
+          ) ||
+          String(c).startsWith(
+            "tourism."
+          ) ||
+          String(c).startsWith(
+            "natural."
+          )
+      );
+
+    if (!hasVenueCategory) {
+      return true;
+    }
   }
 
   return false;
@@ -609,11 +625,10 @@ function mapFeatureToVenue(
   const props =
     feature.properties || {};
 
-  const categories = Array.isArray(
-    props.categories
-  )
-    ? props.categories
-    : [];
+  const categories =
+    Array.isArray(props.categories)
+      ? props.categories
+      : [];
 
   const coords =
     feature.geometry &&
@@ -669,17 +684,18 @@ function mapFeatureToVenue(
     rating: 4.2,
     dist: distMin,
     mood: estimateMood(categories),
-    outdoor:
-      estimateOutdoor(categories),
+    outdoor: estimateOutdoor(categories),
     kidFriendly:
-      estimateKidFriendly(categories),
+      estimateKidFriendly(
+        categories
+      ),
     nightOnly:
-      estimateNightOnly(categories),
-    slots:
-      estimateSlots(categories),
+      estimateNightOnly(
+        categories
+      ),
+    slots: estimateSlots(categories),
     why: null,
-    address:
-      cleanAddress(props),
+    address: cleanAddress(props),
     hours,
     categories,
     source: "geoapify",
@@ -707,7 +723,6 @@ export default async function handler(
   const {
     city,
     intent,
-    exclude,
   } = req.body || {};
 
   if (
@@ -721,18 +736,9 @@ export default async function handler(
     return;
   }
 
-  const normalizedIntent =
-    normalizeIntent(intent);
-
   const categories =
-    INTENT_CATEGORIES[normalizedIntent] ||
+    INTENT_CATEGORIES[intent] ||
     INTENT_CATEGORIES.general;
-
-  const excludeSet = new Set(
-    (Array.isArray(exclude) ? exclude : []).map(
-      (k) => String(k).toLowerCase()
-    )
-  );
 
   try {
     const location =
@@ -765,12 +771,6 @@ export default async function handler(
           categories
         )
       )
-      .filter((feature) =>
-        featureBelongsToFamily(
-          feature,
-          normalizedIntent
-        )
-      )
       .filter(
         (feature) =>
           !looksLikeOnlyAnAddress(
@@ -796,14 +796,6 @@ export default async function handler(
 
         seen.add(key);
         return true;
-      })
-      .filter((place) => {
-        const key =
-          `${place.name}|${
-            place.address || ""
-          }`.toLowerCase();
-
-        return !excludeSet.has(key);
       });
 
     res.status(200).json({
