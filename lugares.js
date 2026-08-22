@@ -19,19 +19,26 @@
 const NOMINATIM_URL =
   "https://nominatim.openstreetmap.org/search";
 
-const OVERPASS_URL =
-  "https://overpass-api.de/api/interpreter";
+/*
+ * Varios servidores Overpass públicos, en orden de preferencia.
+ * Si el primero falla, está caído o tarda demasiado, probamos
+ * el siguiente antes de darnos por vencidos. Esto evita que un
+ * corte temporal de un solo servidor tire abajo toda la búsqueda.
+ */
+const OVERPASS_URLS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.openstreetmap.ru/api/interpreter",
+];
 
 /*
- * IMPORTANTE:
- * Nominatim exige identificar la aplicación mediante User-Agent.
+ * Tiempo máximo (ms) que esperamos a cada servidor antes de
+ * pasar al siguiente.
  */
+const OVERPASS_TIMEOUT_MS = 12000;
+
 const USER_AGENT =
   "SALIME/1.0 (aplicacion universitaria)";
-
-/* ------------------------------------------------------------------ */
-/* CATEGORÍAS                                                         */
-/* ------------------------------------------------------------------ */
 
 const INTENT_TAGS = {
   comer: [
@@ -92,10 +99,6 @@ const INTENT_TAGS = {
   ],
 };
 
-/* ------------------------------------------------------------------ */
-/* UTILIDADES                                                         */
-/* ------------------------------------------------------------------ */
-
 function normalizeText(value) {
   return String(value || "")
     .trim()
@@ -110,26 +113,11 @@ function escapeOverpass(value) {
     .replace(/"/g, '\\"');
 }
 
-/* ------------------------------------------------------------------ */
-/* GEOCODIFICACIÓN                                                     */
-/* ------------------------------------------------------------------ */
-
 async function geocodeLocation(text) {
   const query = String(text || "").trim();
+  if (!query) return null;
 
-  if (!query) {
-    return null;
-  }
-
-  /*
-   * Para evitar que "Güemes" termine resolviendo a otro Güemes
-   * del mundo, priorizamos Argentina cuando el usuario no indicó
-   * otro país.
-   *
-   * Para Buenos Aires/Córdoba agregamos Argentina explícitamente.
-   */
   let searchQuery = query;
-
   const normalized = normalizeText(query);
 
   if (
@@ -152,48 +140,41 @@ async function geocodeLocation(text) {
     countrycodes: "ar",
   });
 
-  const res = await fetch(
-    `${NOMINATIM_URL}?${params.toString()}`,
-    {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    OVERPASS_TIMEOUT_MS
+  );
+
+  let res;
+
+  try {
+    res = await fetch(`${NOMINATIM_URL}?${params.toString()}`, {
       headers: {
         "User-Agent": USER_AGENT,
         Accept: "application/json",
       },
-    }
-  );
-
-  if (!res.ok) {
+      signal: controller.signal,
+    });
+  } catch (err) {
+    console.error("Nominatim request failed:", err && err.message);
     throw new Error("nominatim-geocode-error");
+  } finally {
+    clearTimeout(timeoutId);
   }
+
+  if (!res.ok) throw new Error("nominatim-geocode-error");
 
   const data = await res.json();
+  if (!Array.isArray(data) || data.length === 0) return null;
 
-  if (!Array.isArray(data) || data.length === 0) {
-    return null;
-  }
-
-  /*
-   * Priorizamos resultados argentinos y, especialmente,
-   * aquellos que representan barrios/distritos/ciudades.
-   */
   const scored = data.map((item) => {
     let score = 0;
+    const display = normalizeText(item.display_name);
+    const type = normalizeText(item.type);
+    const category = normalizeText(item.class);
 
-    const display = normalizeText(
-      item.display_name
-    );
-
-    const type = normalizeText(
-      item.type
-    );
-
-    const category = normalizeText(
-      item.class
-    );
-
-    if (display.includes("argentina")) {
-      score += 100;
-    }
+    if (display.includes("argentina")) score += 100;
 
     if (
       type === "city" ||
@@ -206,91 +187,33 @@ async function geocodeLocation(text) {
       score += 50;
     }
 
-    if (
-      category === "place" ||
-      category === "boundary"
-    ) {
-      score += 20;
-    }
+    if (category === "place" || category === "boundary") score += 20;
 
-    /*
-     * Evitamos elegir una calle como centro de búsqueda
-     * cuando el usuario escribió un barrio.
-     */
-    if (
-      type === "road" ||
-      type === "street"
-    ) {
-      score -= 100;
-    }
+    if (type === "road" || type === "street") score -= 100;
 
-    if (
-      normalized ===
-      normalizeText(item.name)
-    ) {
-      score += 40;
-    }
+    if (normalized === normalizeText(item.name)) score += 40;
 
-    return {
-      item,
-      score,
-    };
+    return { item, score };
   });
 
-  scored.sort(
-    (a, b) => b.score - a.score
-  );
-
+  scored.sort((a, b) => b.score - a.score);
   const best = scored[0]?.item;
 
-  if (
-    !best ||
-    !best.lat ||
-    !best.lon
-  ) {
-    return null;
-  }
+  if (!best || !best.lat || !best.lon) return null;
 
   return {
     lat: Number(best.lat),
     lon: Number(best.lon),
-    label:
-      best.display_name ||
-      query,
+    label: best.display_name || query,
   };
 }
 
-/* ------------------------------------------------------------------ */
-/* OVERPASS QUERY                                                      */
-/* ------------------------------------------------------------------ */
-
-function buildOverpassQuery(
-  lat,
-  lon,
-  tags,
-  radius
-) {
+function buildOverpassQuery(lat, lon, tags, radius) {
   const parts = [];
 
   for (const [key, value] of tags) {
-    const safeKey =
-      escapeOverpass(key);
-
-    const safeValue =
-      escapeOverpass(value);
-
-    /*
-     * Buscamos NODE, WAY y RELATION.
-     *
-     * Al consultar específicamente tags como:
-     * amenity=restaurant
-     * amenity=bar
-     * tourism=museum
-     * leisure=park
-     *
-     * una calle normal como Darregueira no entra.
-     */
-
+    const safeKey = escapeOverpass(key);
+    const safeValue = escapeOverpass(value);
     parts.push(
       `nwr["${safeKey}"="${safeValue}"](around:${radius},${lat},${lon});`
     );
@@ -305,170 +228,107 @@ out center tags;
 `;
 }
 
-/* ------------------------------------------------------------------ */
-/* BÚSQUEDA DE LUGARES                                                 */
-/* ------------------------------------------------------------------ */
+/*
+ * Intenta una consulta a un único servidor Overpass, con timeout.
+ * Lanza un error si el servidor no responde a tiempo, responde con
+ * error HTTP, o devuelve algo que no es JSON válido.
+ */
+async function tryOverpassServer(url, query) {
+  const controller = new AbortController();
 
-async function searchPlaces({
-  lat,
-  lon,
-  intent,
-  limit = 40,
-}) {
-  const tags =
-    INTENT_TAGS[intent] ||
-    INTENT_TAGS.general;
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    OVERPASS_TIMEOUT_MS
+  );
 
-  const query =
-    buildOverpassQuery(
-      lat,
-      lon,
-      tags,
-      15000
-    );
-
-  const res = await fetch(
-    OVERPASS_URL,
-    {
+  try {
+    const res = await fetch(url, {
       method: "POST",
       headers: {
-        "Content-Type":
-          "application/x-www-form-urlencoded",
-        "User-Agent":
-          USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": USER_AGENT,
       },
-      body:
-        `data=${encodeURIComponent(query)}`,
+      body: `data=${encodeURIComponent(query)}`,
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error(
+        `Overpass error (${url}):`,
+        res.status,
+        errorText
+      );
+      throw new Error(`overpass-http-${res.status}`);
     }
-  );
 
-  if (!res.ok) {
-    const errorText =
-      await res.text();
+    return await res.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
-    console.error(
-      "Overpass error:",
-      res.status,
-      errorText
-    );
+/*
+ * Prueba cada servidor Overpass en orden hasta que uno responda
+ * correctamente. Si todos fallan, recién ahí propagamos el error.
+ */
+async function searchPlaces({ lat, lon, intent, limit = 40 }) {
+  const tags = INTENT_TAGS[intent] || INTENT_TAGS.general;
+  const query = buildOverpassQuery(lat, lon, tags, 15000);
 
-    throw new Error(
-      "overpass-places-error"
-    );
+  let lastError = null;
+
+  for (const url of OVERPASS_URLS) {
+    try {
+      const data = await tryOverpassServer(url, query);
+      const elements = Array.isArray(data.elements) ? data.elements : [];
+      return elements.slice(0, limit);
+    } catch (err) {
+      lastError = err;
+      console.error(
+        `Overpass server failed, probando el siguiente: ${url}`,
+        err && err.message
+      );
+    }
   }
 
-  const data =
-    await res.json();
-
-  const elements =
-    Array.isArray(data.elements)
-      ? data.elements
-      : [];
-
-  return elements.slice(
-    0,
-    limit
+  console.error(
+    "Todos los servidores Overpass fallaron:",
+    lastError && lastError.message
   );
+
+  throw new Error("overpass-places-error");
 }
 
-/* ------------------------------------------------------------------ */
-/* DISTANCIA                                                           */
-/* ------------------------------------------------------------------ */
-
-function haversineKm(
-  lat1,
-  lon1,
-  lat2,
-  lon2
-) {
+function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
-
-  const dLat =
-    ((lat2 - lat1) *
-      Math.PI) /
-    180;
-
-  const dLon =
-    ((lon2 - lon1) *
-      Math.PI) /
-    180;
-
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(
-      (lat1 * Math.PI) / 180
-    ) *
-      Math.cos(
-        (lat2 * Math.PI) / 180
-      ) *
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) ** 2;
-
-  return (
-    R *
-    2 *
-    Math.atan2(
-      Math.sqrt(a),
-      Math.sqrt(1 - a)
-    )
-  );
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ------------------------------------------------------------------ */
-/* CATEGORÍAS                                                          */
-/* ------------------------------------------------------------------ */
-
 function getTags(element) {
-  return element &&
-    element.tags &&
-    typeof element.tags === "object"
+  return element && element.tags && typeof element.tags === "object"
     ? element.tags
     : {};
 }
 
-function matchesIntent(
-  element,
-  intent
-) {
-  const tags =
-    getTags(element);
-
-  const allowed =
-    INTENT_TAGS[intent] ||
-    INTENT_TAGS.general;
-
-  return allowed.some(
-    ([key, value]) =>
-      tags[key] === value
-  );
+function matchesIntent(element, intent) {
+  const tags = getTags(element);
+  const allowed = INTENT_TAGS[intent] || INTENT_TAGS.general;
+  return allowed.some(([key, value]) => tags[key] === value);
 }
 
-/* ------------------------------------------------------------------ */
-/* FILTRO CRÍTICO: NUNCA CALLES                                        */
-/* ------------------------------------------------------------------ */
+function isStreetOrAddress(element) {
+  const tags = getTags(element);
 
-function isStreetOrAddress(
-  element
-) {
-  const tags =
-    getTags(element);
+  if (tags.highway) return true;
 
-  /*
-   * Si OSM dice highway, es una vía/calle.
-   *
-   * Esto elimina directamente:
-   * Darregueira
-   * Obispo Oro
-   * Cantero
-   * etc.
-   */
-  if (tags.highway) {
-    return true;
-  }
-
-  /*
-   * Otros elementos que no queremos como
-   * establecimientos.
-   */
   if (
     tags.place === "city" ||
     tags.place === "town" ||
@@ -480,223 +340,61 @@ function isStreetOrAddress(
     return true;
   }
 
-  /*
-   * Una dirección aislada tampoco es un lugar.
-   */
-  if (
-    tags.addr &&
-    !tags.amenity &&
-    !tags.tourism &&
-    !tags.leisure
-  ) {
+  if (tags.addr && !tags.amenity && !tags.tourism && !tags.leisure) {
     return true;
   }
 
   return false;
 }
 
-/* ------------------------------------------------------------------ */
-/* NOMBRE REAL                                                         */
-/* ------------------------------------------------------------------ */
-
 function getRealName(element) {
-  const tags =
-    getTags(element);
-
-  /*
-   * name es el nombre principal de OSM.
-   *
-   * NO usamos:
-   * addr:street
-   * addr:housenumber
-   * display_name
-   *
-   * como nombre del lugar.
-   */
-  const name =
-    String(tags.name || "")
-      .trim();
-
-  if (!name) {
-    return null;
-  }
-
-  /*
-   * Nunca devolver solamente números.
-   */
-  if (
-    /^\d+$/.test(name)
-  ) {
-    return null;
-  }
-
+  const tags = getTags(element);
+  const name = String(tags.name || "").trim();
+  if (!name) return null;
+  if (/^\d+$/.test(name)) return null;
   return name;
 }
 
-/* ------------------------------------------------------------------ */
-/* DIRECCIÓN                                                           */
-/* ------------------------------------------------------------------ */
-
 function cleanAddress(tags) {
-  const street =
-    String(
-      tags["addr:street"] || ""
-    ).trim();
-
-  const number =
-    String(
-      tags["addr:housenumber"] || ""
-    ).trim();
-
-  const postcode =
-    String(
-      tags["addr:postcode"] || ""
-    ).trim();
-
-  const city =
-    String(
-      tags["addr:city"] || ""
-    ).trim();
+  const street = String(tags["addr:street"] || "").trim();
+  const number = String(tags["addr:housenumber"] || "").trim();
+  const postcode = String(tags["addr:postcode"] || "").trim();
+  const city = String(tags["addr:city"] || "").trim();
 
   const parts = [];
+  if (street) parts.push(number ? `${street} ${number}` : street);
+  if (city) parts.push(city);
+  if (postcode) parts.push(postcode);
 
-  if (street) {
-    parts.push(
-      number
-        ? `${street} ${number}`
-        : street
-    );
-  }
-
-  if (city) {
-    parts.push(city);
-  }
-
-  if (postcode) {
-    parts.push(postcode);
-  }
-
-  return parts.length
-    ? parts.join(", ")
-    : null;
+  return parts.length ? parts.join(", ") : null;
 }
 
-/* ------------------------------------------------------------------ */
-/* EMOJIS                                                              */
-/* ------------------------------------------------------------------ */
-
 function emojiForTags(tags) {
-  const amenity =
-    tags.amenity;
+  const amenity = tags.amenity;
+  const tourism = tags.tourism;
+  const leisure = tags.leisure;
 
-  const tourism =
-    tags.tourism;
-
-  const leisure =
-    tags.leisure;
-
-  if (
-    amenity ===
-    "fast_food"
-  ) {
-    return "🍔";
-  }
-
-  if (
-    amenity ===
-    "restaurant"
-  ) {
-    return "🍽️";
-  }
-
-  if (
-    amenity ===
-    "cafe"
-  ) {
-    return "☕";
-  }
-
-  if (
-    amenity === "bar" ||
-    amenity === "pub"
-  ) {
-    return "🍺";
-  }
-
-  if (
-    amenity ===
-    "nightclub"
-  ) {
-    return "🎉";
-  }
-
-  if (
-    tourism === "museum" ||
-    tourism === "gallery"
-  ) {
-    return "🖼️";
-  }
-
-  if (
-    amenity === "theatre" ||
-    amenity ===
-      "arts_centre"
-  ) {
-    return "🎭";
-  }
-
-  if (
-    leisure === "park" ||
-    leisure === "garden"
-  ) {
-    return "🌳";
-  }
-
-  if (
-    tourism ===
-    "viewpoint"
-  ) {
-    return "✨";
-  }
-
-  if (
-    tourism ===
-    "attraction"
-  ) {
-    return "📍";
-  }
-
-  if (
-    leisure ===
-    "playground"
-  ) {
-    return "🎡";
-  }
+  if (amenity === "fast_food") return "🍔";
+  if (amenity === "restaurant") return "🍽️";
+  if (amenity === "cafe") return "☕";
+  if (amenity === "bar" || amenity === "pub") return "🍺";
+  if (amenity === "nightclub") return "🎉";
+  if (tourism === "museum" || tourism === "gallery") return "🖼️";
+  if (amenity === "theatre" || amenity === "arts_centre") return "🎭";
+  if (leisure === "park" || leisure === "garden") return "🌳";
+  if (tourism === "viewpoint") return "✨";
+  if (tourism === "attraction") return "📍";
+  if (leisure === "playground") return "🎡";
 
   return "📍";
 }
 
-/* ------------------------------------------------------------------ */
-/* PRECIO                                                              */
-/* ------------------------------------------------------------------ */
-
 function estimatePrice(tags) {
-  const amenity =
-    tags.amenity;
+  const amenity = tags.amenity;
+  const tourism = tags.tourism;
+  const leisure = tags.leisure;
 
-  const tourism =
-    tags.tourism;
-
-  const leisure =
-    tags.leisure;
-
-  if (
-    amenity ===
-    "fast_food"
-  ) {
-    return 1;
-  }
-
+  if (amenity === "fast_food") return 1;
   if (
     amenity === "cafe" ||
     leisure === "park" ||
@@ -705,470 +403,173 @@ function estimatePrice(tags) {
   ) {
     return 1;
   }
-
-  if (
-    amenity === "nightclub"
-  ) {
-    return 3;
-  }
-
-  if (
-    tourism === "museum" ||
-    tourism === "gallery" ||
-    amenity === "theatre"
-  ) {
+  if (amenity === "nightclub") return 3;
+  if (tourism === "museum" || tourism === "gallery" || amenity === "theatre")
     return 2;
-  }
 
   return 2;
 }
 
-/* ------------------------------------------------------------------ */
-/* MOOD                                                                */
-/* ------------------------------------------------------------------ */
-
 function estimateMood(tags) {
   if (
-    tags.amenity ===
-      "nightclub" ||
+    tags.amenity === "nightclub" ||
     tags.amenity === "bar" ||
     tags.amenity === "pub"
   ) {
     return ["animado"];
   }
-
   return ["tranquilo"];
 }
 
-/* ------------------------------------------------------------------ */
-/* OUTDOOR                                                             */
-/* ------------------------------------------------------------------ */
-
 function estimateOutdoor(tags) {
   return (
-    tags.leisure ===
-      "park" ||
-    tags.leisure ===
-      "garden" ||
-    tags.leisure ===
-      "playground" ||
-    tags.tourism ===
-      "viewpoint" ||
-    tags.natural ===
-      "water" ||
-    tags.natural ===
-      "wood"
+    tags.leisure === "park" ||
+    tags.leisure === "garden" ||
+    tags.leisure === "playground" ||
+    tags.tourism === "viewpoint" ||
+    tags.natural === "water" ||
+    tags.natural === "wood"
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* NIÑOS                                                               */
-/* ------------------------------------------------------------------ */
-
-function estimateKidFriendly(
-  tags
-) {
+function estimateKidFriendly(tags) {
   if (
-    tags.amenity ===
-      "nightclub" ||
+    tags.amenity === "nightclub" ||
     tags.amenity === "bar" ||
     tags.amenity === "pub"
   ) {
     return false;
   }
-
   return true;
 }
 
-/* ------------------------------------------------------------------ */
-/* HORARIOS                                                            */
-/* ------------------------------------------------------------------ */
-
 function estimateSlots(tags) {
-  if (
-    tags.amenity ===
-    "nightclub"
-  ) {
-    return ["night"];
-  }
-
-  if (
-    tags.amenity === "bar" ||
-    tags.amenity === "pub"
-  ) {
-    return [
-      "afternoon",
-      "night",
-    ];
-  }
-
-  return [
-    "morning",
-    "afternoon",
-    "night",
-  ];
+  if (tags.amenity === "nightclub") return ["night"];
+  if (tags.amenity === "bar" || tags.amenity === "pub")
+    return ["afternoon", "night"];
+  return ["morning", "afternoon", "night"];
 }
 
-/* ------------------------------------------------------------------ */
-/* CONVERSIÓN                                                          */
-/* ------------------------------------------------------------------ */
-
-function mapElementToVenue(
-  element,
-  center
-) {
-  const tags =
-    getTags(element);
-
-  const name =
-    getRealName(element);
-
-  if (!name) {
-    return null;
-  }
+function mapElementToVenue(element, center) {
+  const tags = getTags(element);
+  const name = getRealName(element);
+  if (!name) return null;
 
   let lat = null;
   let lon = null;
 
   if (
-    element.type ===
-      "node" &&
-    typeof element.lat ===
-      "number" &&
-    typeof element.lon ===
-      "number"
+    element.type === "node" &&
+    typeof element.lat === "number" &&
+    typeof element.lon === "number"
   ) {
     lat = element.lat;
     lon = element.lon;
   }
 
   if (
-    (element.type ===
-      "way" ||
-      element.type ===
-        "relation") &&
+    (element.type === "way" || element.type === "relation") &&
     element.center
   ) {
-    lat =
-      Number(
-        element.center.lat
-      );
-
-    lon =
-      Number(
-        element.center.lon
-      );
+    lat = Number(element.center.lat);
+    lon = Number(element.center.lon);
   }
 
   if (
-    typeof lat !==
-      "number" ||
-    typeof lon !==
-      "number" ||
+    typeof lat !== "number" ||
+    typeof lon !== "number" ||
     !Number.isFinite(lat) ||
     !Number.isFinite(lon)
   ) {
     return null;
   }
 
-  const distKm =
-    haversineKm(
-      center.lat,
-      center.lon,
-      lat,
-      lon
-    );
+  const distKm = haversineKm(center.lat, center.lon, lat, lon);
+  const distMin = Math.max(1, Math.round((distKm / 4.5) * 60));
 
-  const distMin =
-    Math.max(
-      1,
-      Math.round(
-        (distKm / 4.5) *
-          60
-      )
-    );
-
-  const hours =
-    tags.opening_hours
-      ? parseSimpleHours(
-          tags.opening_hours
-        )
-      : null;
+  const hours = tags.opening_hours ? parseSimpleHours(tags.opening_hours) : null;
 
   return {
     name,
-    emoji:
-      emojiForTags(tags),
-
-    price:
-      estimatePrice(tags),
-
+    emoji: emojiForTags(tags),
+    price: estimatePrice(tags),
     rating: 4.2,
-
-    dist:
-      distMin,
-
-    mood:
-      estimateMood(tags),
-
-    outdoor:
-      estimateOutdoor(tags),
-
-    kidFriendly:
-      estimateKidFriendly(
-        tags
-      ),
-
-    nightOnly:
-      tags.amenity ===
-      "nightclub",
-
-    slots:
-      estimateSlots(tags),
-
+    dist: distMin,
+    mood: estimateMood(tags),
+    outdoor: estimateOutdoor(tags),
+    kidFriendly: estimateKidFriendly(tags),
+    nightOnly: tags.amenity === "nightclub",
+    slots: estimateSlots(tags),
     why: null,
-
-    address:
-      cleanAddress(tags),
-
+    address: cleanAddress(tags),
     hours,
-
-    categories: [
-      tags.amenity,
-      tags.tourism,
-      tags.leisure,
-    ].filter(Boolean),
-
-    source:
-      "openstreetmap",
+    categories: [tags.amenity, tags.tourism, tags.leisure].filter(Boolean),
+    source: "openstreetmap",
   };
 }
 
-/* ------------------------------------------------------------------ */
-/* HORARIOS SIMPLES                                                    */
-/* ------------------------------------------------------------------ */
-
-function parseSimpleHours(
-  raw
-) {
-  if (
-    !raw ||
-    typeof raw !==
-      "string"
-  ) {
-    return null;
-  }
-
-  const match =
-    raw.match(
-      /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/
-    );
-
-  if (!match) {
-    return null;
-  }
-
-  return [
-    match[1],
-    match[2],
-  ];
+function parseSimpleHours(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const match = raw.match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/);
+  if (!match) return null;
+  return [match[1], match[2]];
 }
 
-/* ------------------------------------------------------------------ */
-/* HANDLER                                                             */
-/* ------------------------------------------------------------------ */
-
-export default async function handler(
-  req,
-  res
-) {
-  if (
-    req.method !==
-    "POST"
-  ) {
-    res.status(405).json({
-      error:
-        "method-not-allowed",
-    });
-
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "method-not-allowed" });
     return;
   }
 
-  const {
-    city,
-    intent,
-  } =
-    req.body || {};
+  const { city, intent } = req.body || {};
 
-  if (
-    !city ||
-    typeof city !==
-      "string" ||
-    !city.trim()
-  ) {
-    res.status(400).json({
-      error:
-        "missing-city",
-    });
-
+  if (!city || typeof city !== "string" || !city.trim()) {
+    res.status(400).json({ error: "missing-city" });
     return;
   }
 
-  const normalizedIntent =
-    INTENT_TAGS[intent]
-      ? intent
-      : "general";
+  const normalizedIntent = INTENT_TAGS[intent] ? intent : "general";
 
   try {
-    /*
-     * 1. Convertimos la ubicación
-     *    en coordenadas.
-     */
-    const location =
-      await geocodeLocation(
-        city.trim()
-      );
+    const location = await geocodeLocation(city.trim());
 
     if (!location) {
-      res.status(200).json({
-        city,
-        resolvedCity:
-          null,
-        places: [],
-      });
-
+      res.status(200).json({ city, resolvedCity: null, places: [] });
       return;
     }
 
-    /*
-     * 2. Buscamos exclusivamente
-     *    objetos OSM etiquetados
-     *    como lugares.
-     */
-    const elements =
-      await searchPlaces({
-        lat:
-          location.lat,
+    const elements = await searchPlaces({
+      lat: location.lat,
+      lon: location.lon,
+      intent: normalizedIntent,
+      limit: 60,
+    });
 
-        lon:
-          location.lon,
+    const seen = new Set();
 
-        intent:
-          normalizedIntent,
-
-        limit: 60,
-      });
-
-    const seen =
-      new Set();
-
-    const places =
-      elements
-
-        /*
-         * Debe pertenecer
-         * realmente al intent.
-         */
-        .filter(
-          (element) =>
-            matchesIntent(
-              element,
-              normalizedIntent
-            )
-        )
-
-        /*
-         * FILTRO MÁS IMPORTANTE:
-         * nunca calles,
-         * barrios o ciudades.
-         */
-        .filter(
-          (element) =>
-            !isStreetOrAddress(
-              element
-            )
-        )
-
-        /*
-         * Debe tener nombre real.
-         */
-        .filter(
-          (element) =>
-            !!getRealName(
-              element
-            )
-        )
-
-        /*
-         * Convertimos al formato
-         * que ya espera el frontend.
-         */
-        .map(
-          (element) =>
-            mapElementToVenue(
-              element,
-              location
-            )
-        )
-
-        .filter(Boolean)
-
-        /*
-         * Duplicados.
-         */
-        .filter((place) => {
-          const key =
-            normalizeText(
-              place.name
-            ) +
-            "|" +
-            normalizeText(
-              place.address ||
-                ""
-            );
-
-          if (
-            seen.has(key)
-          ) {
-            return false;
-          }
-
-          seen.add(key);
-
-          return true;
-        })
-
-        /*
-         * Más cercanos primero.
-         */
-        .sort(
-          (a, b) =>
-            a.dist - b.dist
-        )
-
-        /*
-         * El frontend recibe
-         * como máximo 20.
-         */
-        .slice(0, 20);
+    const places = elements
+      .filter((element) => matchesIntent(element, normalizedIntent))
+      .filter((element) => !isStreetOrAddress(element))
+      .filter((element) => !!getRealName(element))
+      .map((element) => mapElementToVenue(element, location))
+      .filter(Boolean)
+      .filter((place) => {
+        const key =
+          normalizeText(place.name) + "|" + normalizeText(place.address || "");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 20);
 
     res.status(200).json({
       city,
-
-      resolvedCity:
-        location.label,
-
+      resolvedCity: location.label,
       places,
     });
   } catch (err) {
-    console.error(
-      "OpenStreetMap / Overpass error:",
-      err
-    );
-
-    res.status(502).json({
-      error:
-        "places-request-failed",
-    });
+    console.error("OpenStreetMap / Overpass error:", err);
+    res.status(502).json({ error: "places-request-failed" });
   }
-    }
+}
