@@ -493,6 +493,37 @@ function isStreetOrAddress(element) {
     return true;
   }
 
+  /*
+   * VERIFICACIÓN CLAVE: si el nombre del "lugar" es idéntico al
+   * nombre de su propia calle, barrio o ciudad (según sus propias
+   * etiquetas de dirección), casi seguro es un error de datos: una
+   * calle o un barrio que quedó mal etiquetado con amenity/tourism/
+   * leisure, no un comercio real. Un negocio real prácticamente
+   * nunca se llama exactamente igual que la calle o el barrio donde
+   * está. Esto es lo que descarta "Obispo Oro" (nombre = su propia
+   * addr:street) y "Nueva Córdoba" (nombre = su propio addr:city),
+   * sin depender de una segunda consulta a Overpass que puede
+   * fallar por límites de uso.
+   */
+  const normalizedName = normalizeText(name);
+
+  const ownAddressFields = [
+    tags["addr:street"],
+    tags["addr:city"],
+    tags["addr:suburb"],
+    tags["addr:neighbourhood"],
+    tags["addr:district"],
+    tags["addr:place"],
+  ];
+
+  const nameMatchesOwnAddress = ownAddressFields.some(
+    (field) => field && normalizeText(field) === normalizedName
+  );
+
+  if (nameMatchesOwnAddress) {
+    return true;
+  }
+
   return false;
 }
 
@@ -676,10 +707,25 @@ export default async function handler(req, res) {
      * 2. Filtros básicos: intent correcto, no es calle/dirección por
      *    sus propios tags, y tiene nombre real.
      */
+    const queriedLocationName = normalizeText(city.trim());
+
     const basicCandidates = rawElements
       .filter((element) => matchesIntent(element, normalizedIntent))
       .filter((element) => !isStreetOrAddress(element))
-      .filter((element) => !!getRealName(element));
+      .filter((element) => !!getRealName(element))
+      /*
+       * Si el nombre del candidato es exactamente igual a la zona
+       * que el usuario pidió (por ejemplo, buscó "Nueva Córdoba" y
+       * aparece un resultado llamado literalmente "Nueva Córdoba"),
+       * lo descartamos. Esto cubre casos donde el elemento no tenía
+       * las etiquetas addr:* esperadas pero igual es, en los
+       * hechos, el barrio/zona en sí y no un comercio.
+       */
+      .filter((element) => {
+        const name = getRealName(element);
+        if (!name) return false;
+        return normalizeText(name) !== queriedLocationName;
+      });
 
     /*
      * 3. Para cada candidato que sobrevivió, calculamos sus
