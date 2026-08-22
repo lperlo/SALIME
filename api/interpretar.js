@@ -1,4 +1,3 @@
-
 // api/interpretar.js
 //
 // Endpoint serverless (Vercel) para SALIME.
@@ -85,7 +84,7 @@ Identificá qué quiere hacer principalmente el usuario.
 - "museo", "exposición", "arte", "cultural", "cultura", "teatro", "algo cultural" → "cultura"
 - "pasear", "caminar", "dar una vuelta", "recorrer", "salir a pasear" → "paseo"
 - "aire libre", "al aire libre", "naturaleza", "parque", "plaza", "estar afuera" → "aire_libre"
-- "fiesta", "boliche", "bailar", "salir de fiesta" → "fiesta"
+- "fiesta", "boliche", "bailar", "salir de fiesta", "divertido", "algo divertido", "diversión" → "fiesta"
 - "con chicos", "con niños", "con mis hijos", "plan familiar" → "familia"
 
 Si no existe una intención principal clara → "general".
@@ -207,6 +206,29 @@ DEVOLVÉ ÚNICAMENTE EL JSON.
 
 const GEMINI_MODEL = "gemini-3.6-flash";
 
+/**
+ * Normaliza un valor de texto para comparaciones robustas:
+ * saca espacios de más, pasa a minúsculas y quita tildes.
+ */
+function normalizeForComparison(raw) {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/**
+ * Capitaliza la primera letra de cada palabra, incluyendo
+ * letras acentuadas.
+ */
+function capitalizeWords(lowerText) {
+  return lowerText.replace(
+    /(^|[\s-])(\p{L})/gu,
+    (_match, sep, letter) => sep + letter.toUpperCase()
+  );
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "método no permitido" });
@@ -292,7 +314,6 @@ export default async function handler(req, res) {
       throw new Error("respuesta_gemini_vacia");
     }
 
-    // Por seguridad, limpiamos posibles bloques markdown.
     const clean = raw
       .replace(/^```json\s*/i, "")
       .replace(/^```\s*/i, "")
@@ -346,9 +367,23 @@ export default async function handler(req, res) {
       ? parsed.mood
       : null;
 
-    const normalizedIntent = validIntent.includes(parsed.intent)
-      ? parsed.intent
+    // ---------------------------------------------------------------
+    // Normalización robusta de INTENT
+    // ---------------------------------------------------------------
+
+    const rawIntentNormalized = normalizeForComparison(
+      parsed.intent
+    );
+
+    const normalizedIntent = validIntent.includes(
+      rawIntentNormalized
+    )
+      ? rawIntentNormalized
       : "general";
+
+    // ---------------------------------------------------------------
+    // Hora exacta
+    // ---------------------------------------------------------------
 
     let explicitHour = null;
 
@@ -375,26 +410,39 @@ export default async function handler(req, res) {
 
       const knownLocations = {
         "cordoba": "Córdoba",
-        "córdoba": "Córdoba",
         "nueva cordoba": "Nueva Córdoba",
-        "nueva córdoba": "Nueva Córdoba",
         "guemes": "Güemes",
-        "güemes": "Güemes",
         "alta cordoba": "Alta Córdoba",
-        "alta córdoba": "Alta Córdoba",
         "centro": "Centro",
       };
 
-      const normalizedKey = rawLocation
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "");
+      const normalizedFull = normalizeForComparison(
+        rawLocation
+      );
+
+      let matchedKnown = knownLocations[normalizedFull]
+        ? normalizedFull
+        : null;
+
+      if (!matchedKnown) {
+        const candidateKeys = Object.keys(
+          knownLocations
+        ).sort((a, b) => {
+          if (a === "cordoba") return 1;
+          if (b === "cordoba") return -1;
+          return b.length - a.length;
+        });
+
+        matchedKnown = candidateKeys.find((key) =>
+          new RegExp(
+            `\\b${key.replace(/\s+/g, "\\s+")}\\b`
+          ).test(normalizedFull)
+        );
+      }
 
       location =
-        knownLocations[normalizedKey] ||
-        rawLocation
-          .toLowerCase()
-          .replace(/\b\w/g, (char) => char.toUpperCase());
+        (matchedKnown && knownLocations[matchedKnown]) ||
+        capitalizeWords(rawLocation.toLowerCase());
     }
 
     // ---------------------------------------------------------------
@@ -468,4 +516,4 @@ export default async function handler(req, res) {
       error: "interpretación fallida",
     });
   }
-        }
+                                          }
