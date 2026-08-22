@@ -271,18 +271,14 @@ async function tryOverpassServer(url, query) {
 /*
  * Prueba cada servidor Overpass en orden hasta que uno responda
  * correctamente. Si todos fallan, recién ahí propagamos el error.
+ * Se usa tanto para buscar lugares como para buscar calles.
  */
-async function searchPlaces({ lat, lon, intent, limit = 40 }) {
-  const tags = INTENT_TAGS[intent] || INTENT_TAGS.general;
-  const query = buildOverpassQuery(lat, lon, tags, 15000);
-
+async function runOverpassQuery(query) {
   let lastError = null;
 
   for (const url of OVERPASS_URLS) {
     try {
-      const data = await tryOverpassServer(url, query);
-      const elements = Array.isArray(data.elements) ? data.elements : [];
-      return elements.slice(0, limit);
+      return await tryOverpassServer(url, query);
     } catch (err) {
       lastError = err;
       console.error(
@@ -298,6 +294,81 @@ async function searchPlaces({ lat, lon, intent, limit = 40 }) {
   );
 
   throw new Error("overpass-places-error");
+}
+
+async function searchPlaces({ lat, lon, intent, limit = 40 }) {
+  const tags = INTENT_TAGS[intent] || INTENT_TAGS.general;
+  const query = buildOverpassQuery(lat, lon, tags, 15000);
+  const data = await runOverpassQuery(query);
+  const elements = Array.isArray(data.elements) ? data.elements : [];
+  return elements.slice(0, limit);
+}
+
+/* ------------------------------------------------------------------ */
+/* VERIFICACIÓN CRUZADA CONTRA CALLES REALES                          */
+/*                                                                    */
+/* Esto es lo que soluciona de raíz el problema de "Darregueyra":     */
+/* en vez de intentar adivinar por tags si algo ES una calle,          */
+/* directamente le preguntamos a OSM qué calles existen alrededor      */
+/* del punto buscado, y descartamos cualquier "lugar" cuyo nombre      */
+/* coincida con el de una calle real cercana. Esto funciona para       */
+/* CUALQUIER calle (Darregueyra, Obispo Oro, la que sea), no solo      */
+/* para nombres específicos que ya conocemos.                          */
+/* ------------------------------------------------------------------ */
+
+function buildStreetNamesQuery(lat, lon, radius) {
+  return `
+[out:json][timeout:25];
+(
+  way["highway"]["name"](around:${radius},${lat},${lon});
+);
+out tags;
+`;
+}
+
+async function fetchNearbyStreetNames(lat, lon, radius) {
+  try {
+    const query = buildStreetNamesQuery(lat, lon, radius);
+    const data = await runOverpassQuery(query);
+    const elements = Array.isArray(data.elements) ? data.elements : [];
+
+    const names = new Set();
+
+    for (const element of elements) {
+      const tags = getTags(element);
+      const name = String(tags.name || "").trim();
+
+      if (name) {
+        names.add(normalizeText(name));
+      }
+    }
+
+    return names;
+  } catch (err) {
+    /*
+     * Si esta consulta falla, no bloqueamos toda la búsqueda:
+     * seguimos sin esta capa extra de verificación, apoyándonos
+     * en el resto de los filtros (isStreetOrAddress, etc).
+     */
+    console.error(
+      "No se pudieron obtener calles cercanas:",
+      err && err.message
+    );
+    return new Set();
+  }
+}
+
+/*
+ * Palabras que en Argentina casi siempre identifican elementos de
+ * infraestructura urbana (canteros, rotondas, medianas) y no
+ * establecimientos reales, incluso cuando OSM los etiquetó por error
+ * como leisure=park o similar.
+ */
+const INFRASTRUCTURE_WORDS =
+  /\b(cantero(es)?|rotonda|camellon|mediana|bandejon)\b/;
+
+function looksLikeUrbanInfrastructure(name) {
+  return INFRASTRUCTURE_WORDS.test(normalizeText(name));
 }
 
 function haversineKm(lat1, lon1, lat2, lon2) {
@@ -340,7 +411,30 @@ function isStreetOrAddress(element) {
     return true;
   }
 
-  if (tags.addr && !tags.amenity && !tags.tourism && !tags.leisure) {
+  /*
+   * Un punto que solo tiene datos de dirección (addr:street,
+   * addr:housenumber) pero ningún tag de establecimiento real,
+   * tampoco es un lugar.
+   */
+  const hasAddressTags =
+    tags["addr:street"] || tags["addr:housenumber"];
+
+  if (
+    hasAddressTags &&
+    !tags.amenity &&
+    !tags.tourism &&
+    !tags.leisure
+  ) {
+    return true;
+  }
+
+  /*
+   * Infraestructura urbana (canteros, rotondas) que a veces queda
+   * mal etiquetada en OSM como si fuera un parque o lugar de paseo.
+   */
+  const name = String(tags.name || "");
+
+  if (looksLikeUrbanInfrastructure(name)) {
     return true;
   }
 
@@ -538,12 +632,20 @@ export default async function handler(req, res) {
       return;
     }
 
-    const elements = await searchPlaces({
-      lat: location.lat,
-      lon: location.lon,
-      intent: normalizedIntent,
-      limit: 60,
-    });
+    /*
+     * Buscamos lugares y calles cercanas en paralelo. Las calles se
+     * usan después para descartar cualquier "lugar" cuyo nombre
+     * coincida con el de una calle real de la zona.
+     */
+    const [elements, nearbyStreetNames] = await Promise.all([
+      searchPlaces({
+        lat: location.lat,
+        lon: location.lon,
+        intent: normalizedIntent,
+        limit: 60,
+      }),
+      fetchNearbyStreetNames(location.lat, location.lon, 15000),
+    ]);
 
     const seen = new Set();
 
@@ -551,6 +653,17 @@ export default async function handler(req, res) {
       .filter((element) => matchesIntent(element, normalizedIntent))
       .filter((element) => !isStreetOrAddress(element))
       .filter((element) => !!getRealName(element))
+      /*
+       * VERIFICACIÓN CRUZADA: si el nombre del "lugar" es en
+       * realidad el nombre de una calle real de la zona, lo
+       * descartamos. Esto es lo que elimina definitivamente casos
+       * como "Darregueyra" sin necesidad de un parche por nombre.
+       */
+      .filter((element) => {
+        const name = getRealName(element);
+        if (!name) return false;
+        return !nearbyStreetNames.has(normalizeText(name));
+      })
       .map((element) => mapElementToVenue(element, location))
       .filter(Boolean)
       .filter((place) => {
