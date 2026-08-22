@@ -1,22 +1,18 @@
-/* ------------------------------------------------------------------ */
-/* api/lugares.js                                                     */
-/*                                                                    */
-/* Busca lugares REALES con Geoapify.                                 */
-/*                                                                    */
-/* REGLA PRINCIPAL:                                                   */
-/* Solo devuelve establecimientos / lugares que correspondan a la   */
-/* intención solicitada. Nunca devuelve calles, barrios, ciudades,   */
-/* direcciones ni entidades geográficas como si fueran lugares.      */
-/*                                                                    */
-/* La API key vive únicamente en Vercel:                              */
-/* GEOAPIFY_API_KEY                                                   */
-/* ------------------------------------------------------------------ */
+// api/lugares.js
+//
+// SALIME - búsqueda de lugares reales.
+//
+// OBJETIVO:
+// - Buscar lugares reales con Geoapify.
+// - Nunca mostrar calles como lugares.
+// - Nunca mostrar barrios, ciudades, distritos o direcciones.
+// - Respetar estrictamente el intent.
+// - Respetar la ubicación indicada.
+// - Si no hay suficientes lugares válidos, devolver menos resultados.
+// - NUNCA rellenar resultados con candidatos dudosos.
+//
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
-
-/* ------------------------------------------------------------------ */
-/* CATEGORÍAS POR INTENCIÓN                                            */
-/* ------------------------------------------------------------------ */
 
 const INTENT_CATEGORIES = {
   comer: [
@@ -39,15 +35,17 @@ const INTENT_CATEGORIES = {
   ],
 
   paseo: [
+    "tourism.attraction",
+    "tourism.sights",
+    "tourism.information",
     "leisure.park",
-    "tourism.attraction.viewpoint",
-    "natural",
   ],
 
   aire_libre: [
     "leisure.park",
     "natural",
     "natural.water",
+    "tourism.attraction.viewpoint",
   ],
 
   fiesta: [
@@ -71,9 +69,10 @@ const INTENT_CATEGORIES = {
   ],
 };
 
-/* ------------------------------------------------------------------ */
-/* UTILIDADES                                                         */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// UTILIDADES
+// ---------------------------------------------------------------
 
 function normalizeText(value) {
   return String(value || "")
@@ -83,9 +82,6 @@ function normalizeText(value) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-/* ------------------------------------------------------------------ */
-/* PRECIO                                                              */
-/* ------------------------------------------------------------------ */
 
 function estimatePrice(categories) {
   const cats = categories || [];
@@ -140,9 +136,6 @@ function estimatePrice(categories) {
   return 2;
 }
 
-/* ------------------------------------------------------------------ */
-/* MOOD                                                                */
-/* ------------------------------------------------------------------ */
 
 function estimateMood(categories) {
   const cats = categories || [];
@@ -161,9 +154,6 @@ function estimateMood(categories) {
   return ["tranquilo"];
 }
 
-/* ------------------------------------------------------------------ */
-/* OUTDOOR                                                             */
-/* ------------------------------------------------------------------ */
 
 function estimateOutdoor(categories) {
   const cats = categories || [];
@@ -177,9 +167,6 @@ function estimateOutdoor(categories) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* KIDS                                                                */
-/* ------------------------------------------------------------------ */
 
 function estimateKidFriendly(categories) {
   const cats = categories || [];
@@ -198,28 +185,22 @@ function estimateKidFriendly(categories) {
   return true;
 }
 
-/* ------------------------------------------------------------------ */
-/* NIGHT ONLY                                                          */
-/* ------------------------------------------------------------------ */
 
 function estimateNightOnly(categories) {
   const cats = categories || [];
 
-  return cats.some((c) =>
-    c.includes("nightclub")
+  return cats.some(
+    (c) => c.includes("nightclub")
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* HORARIOS                                                            */
-/* ------------------------------------------------------------------ */
 
 function estimateSlots(categories) {
   const cats = categories || [];
 
   if (
-    cats.some((c) =>
-      c.includes("nightclub")
+    cats.some(
+      (c) => c.includes("nightclub")
     )
   ) {
     return ["night"];
@@ -235,16 +216,9 @@ function estimateSlots(categories) {
     return ["afternoon", "night"];
   }
 
-  return [
-    "morning",
-    "afternoon",
-    "night",
-  ];
+  return ["morning", "afternoon", "night"];
 }
 
-/* ------------------------------------------------------------------ */
-/* EMOJI                                                               */
-/* ------------------------------------------------------------------ */
 
 function emojiFor(categories) {
   const cats = categories || [];
@@ -340,9 +314,6 @@ function emojiFor(categories) {
   return "📍";
 }
 
-/* ------------------------------------------------------------------ */
-/* HORARIOS SIMPLES                                                    */
-/* ------------------------------------------------------------------ */
 
 function parseSimpleHours(raw) {
   if (!raw || typeof raw !== "string") {
@@ -357,15 +328,13 @@ function parseSimpleHours(raw) {
     return null;
   }
 
-  return [
-    match[1],
-    match[2],
-  ];
+  return [match[1], match[2]];
 }
 
-/* ------------------------------------------------------------------ */
-/* GEOCODIFICACIÓN                                                     */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// GEOCODIFICACIÓN
+// ---------------------------------------------------------------
 
 async function geocodeLocation(text) {
   const query = String(text || "").trim();
@@ -384,16 +353,12 @@ async function geocodeLocation(text) {
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(
-      "geoapify-geocode-error"
-    );
+    throw new Error("geoapify-geocode-error");
   }
 
   const data = await res.json();
 
-  const results = Array.isArray(
-    data.results
-  )
+  const results = Array.isArray(data.results)
     ? data.results
     : [];
 
@@ -404,7 +369,7 @@ async function geocodeLocation(text) {
   const wanted = normalizeText(query);
 
   const score = (r) => {
-    const values = [
+    const fields = [
       r.name,
       r.city,
       r.state,
@@ -414,12 +379,12 @@ async function geocodeLocation(text) {
       r.formatted,
     ];
 
-    const hay = values.map(normalizeText);
+    const values = fields.map(normalizeText);
 
     let scoreValue = 0;
 
     if (
-      hay.some((v) =>
+      values.some((v) =>
         v.includes("cordoba")
       )
     ) {
@@ -427,11 +392,11 @@ async function geocodeLocation(text) {
     }
 
     if (
-      hay.some((v) =>
-        v === wanted
+      values.some(
+        (v) => v === wanted
       )
     ) {
-      scoreValue += 80;
+      scoreValue += 100;
     }
 
     if (
@@ -439,19 +404,19 @@ async function geocodeLocation(text) {
       normalizeText(r.neighbourhood) === wanted ||
       normalizeText(r.district) === wanted
     ) {
-      scoreValue += 70;
+      scoreValue += 80;
     }
 
     if (
       normalizeText(r.city) === wanted
     ) {
-      scoreValue += 50;
+      scoreValue += 60;
     }
 
     if (
       normalizeText(r.name) === wanted
     ) {
-      scoreValue += 45;
+      scoreValue += 50;
     }
 
     if (
@@ -462,8 +427,9 @@ async function geocodeLocation(text) {
       scoreValue += 20;
     }
 
-    const resultType =
-      normalizeText(r.result_type);
+    const resultType = normalizeText(
+      r.result_type
+    );
 
     if (
       resultType.includes("suburb") ||
@@ -486,8 +452,7 @@ async function geocodeLocation(text) {
   };
 
   const first = [...results].sort(
-    (a, b) =>
-      score(b) - score(a)
+    (a, b) => score(b) - score(a)
   )[0];
 
   if (
@@ -501,16 +466,15 @@ async function geocodeLocation(text) {
   return {
     lat: first.lat,
     lon: first.lon,
-    label:
-      first.formatted || query,
-    placeId:
-      first.place_id || null,
+    label: first.formatted || query,
+    placeId: first.place_id || null,
   };
 }
 
-/* ------------------------------------------------------------------ */
-/* BÚSQUEDA DE LUGARES                                                 */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// BÚSQUEDA DE LUGARES
+// ---------------------------------------------------------------
 
 async function searchPlaces({
   lat,
@@ -518,27 +482,17 @@ async function searchPlaces({
   categories,
   limit = 40,
 }) {
-  const params =
-    new URLSearchParams({
-      categories:
-        categories.join(","),
-      limit: String(limit),
+  const params = new URLSearchParams({
+    categories: categories.join(","),
+    limit: String(limit),
 
-      /*
-       * Preferimos los lugares más cercanos
-       * al punto encontrado.
-       */
-      bias:
-        `proximity:${lon},${lat}`,
+    bias: `proximity:${lon},${lat}`,
 
-      /*
-       * Radio de 15 km.
-       */
-      filter:
-        `circle:${lon},${lat},15000`,
+    // Radio suficientemente amplio para encontrar lugares reales.
+    filter: `circle:${lon},${lat},15000`,
 
-      apiKey: GEOAPIFY_KEY,
-    });
+    apiKey: GEOAPIFY_KEY,
+  });
 
   const url =
     `https://api.geoapify.com/v2/places?${params.toString()}`;
@@ -553,16 +507,15 @@ async function searchPlaces({
 
   const data = await res.json();
 
-  return Array.isArray(
-    data.features
-  )
+  return Array.isArray(data.features)
     ? data.features
     : [];
 }
 
-/* ------------------------------------------------------------------ */
-/* DISTANCIA                                                           */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// DISTANCIA
+// ---------------------------------------------------------------
 
 function haversineKm(
   lat1,
@@ -573,14 +526,10 @@ function haversineKm(
   const R = 6371;
 
   const dLat =
-    ((lat2 - lat1) *
-      Math.PI) /
-    180;
+    ((lat2 - lat1) * Math.PI) / 180;
 
   const dLon =
-    ((lon2 - lon1) *
-      Math.PI) /
-    180;
+    ((lon2 - lon1) * Math.PI) / 180;
 
   const a =
     Math.sin(dLat / 2) ** 2 +
@@ -602,9 +551,10 @@ function haversineKm(
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* DIRECCIÓN                                                           */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// DIRECCIÓN
+// ---------------------------------------------------------------
 
 function cleanAddress(props) {
   const street = [
@@ -649,403 +599,391 @@ function cleanAddress(props) {
   return null;
 }
 
-/* ------------------------------------------------------------------ */
-/* INTENCIÓN                                                           */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// CATEGORÍAS
+// ---------------------------------------------------------------
 
 function featureMatchesIntent(
   feature,
   allowedCategories
 ) {
   const props =
-    feature &&
-    feature.properties
-      ? feature.properties
-      : {};
+    feature?.properties || {};
 
-  const categories =
-    Array.isArray(
-      props.categories
+  const categories = Array.isArray(
+    props.categories
+  )
+    ? props.categories
+    : [];
+
+  return categories.some((actual) =>
+    allowedCategories.some(
+      (allowed) =>
+        actual === allowed ||
+        actual.startsWith(
+          `${allowed}.`
+        )
     )
-      ? props.categories
-      : [];
-
-  return categories.some(
-    (actual) =>
-      allowedCategories.some(
-        (allowed) =>
-          actual === allowed ||
-          actual.startsWith(
-            `${allowed}.`
-          )
-      )
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* FILTRO REFORZADO CONTRA CALLES Y DIRECCIONES                       */
-/* ------------------------------------------------------------------ */
 
-/*
- * Esta función es deliberadamente estricta.
- *
- * Si Geoapify devuelve una calle como:
- *
- *   Darregueira
- *   Obispo Oro
- *   Av. Santa Fe
- *   Córdoba
- *
- * no queremos que pase como si fuera un lugar.
- *
- * También descartamos:
- *
- * - calles
- * - avenidas
- * - rutas
- * - autopistas
- * - barrios
- * - ciudades
- * - localidades
- * - distritos
- * - direcciones
- * - resultados administrativos
- * - resultados sin nombre comercial
- */
+// ---------------------------------------------------------------
+// FILTRO MUY ESTRICTO DE CALLES / DIRECCIONES
+// ---------------------------------------------------------------
 
-function looksLikeOnlyAnAddress(
+function looksLikeStreetOrAddress(
   feature
 ) {
   const props =
-    feature &&
-    feature.properties
-      ? feature.properties
-      : {};
+    feature?.properties || {};
 
-  const name =
-    String(
-      props.name || ""
-    ).trim();
-
-  const nameNorm =
-    normalizeText(name);
-
-  const addressLine1 =
-    String(
-      props.address_line1 || ""
-    ).trim();
-
-  const street =
-    String(
-      props.street || ""
-    ).trim();
-
-  const suburb =
-    String(
-      props.suburb || ""
-    ).trim();
-
-  const neighbourhood =
-    String(
-      props.neighbourhood || ""
-    ).trim();
-
-  const district =
-    String(
-      props.district || ""
-    ).trim();
-
-  const city =
-    String(
-      props.city || ""
-    ).trim();
-
-  const resultType =
-    normalizeText(
-      props.result_type
-    );
-
-  const categories =
-    Array.isArray(
-      props.categories
-    )
-      ? props.categories.map(
-          (c) =>
-            normalizeText(c)
-        )
-      : [];
-
-  /* -------------------------------------------------------------- */
-  /* 1. SIN NOMBRE = DESCARTAR                                       */
-  /* -------------------------------------------------------------- */
+  const name = normalizeText(
+    props.name
+  );
 
   if (!name) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 2. NÚMERO SOLO = DESCARTAR                                     */
-  /* -------------------------------------------------------------- */
+  const street = normalizeText(
+    props.street
+  );
 
-  if (
-    /^\d{1,6}$/.test(name)
-  ) {
-    return true;
-  }
+  const addressLine1 =
+    normalizeText(
+      props.address_line1
+    );
 
-  /* -------------------------------------------------------------- */
-  /* 3. RESULT TYPE GEOGRÁFICO                                      */
-  /* -------------------------------------------------------------- */
+  const suburb = normalizeText(
+    props.suburb
+  );
 
-  const geographicResultTypes = [
+  const neighbourhood =
+    normalizeText(
+      props.neighbourhood
+    );
+
+  const district =
+    normalizeText(
+      props.district
+    );
+
+  const city =
+    normalizeText(
+      props.city
+    );
+
+  /*
+   * Si Geoapify dice explícitamente que el
+   * resultado es una calle, ruta, camino, etc.,
+   * lo descartamos.
+   */
+  const resultType = normalizeText(
+    props.result_type
+  );
+
+  const forbiddenResultTypes = [
     "street",
     "road",
-    "avenue",
     "highway",
     "path",
+    "way",
     "route",
+    "avenue",
     "square",
-    "neighbourhood",
+    "locality",
     "suburb",
+    "neighbourhood",
     "district",
     "city",
-    "town",
-    "village",
     "municipality",
-    "locality",
     "county",
     "state",
     "country",
     "postcode",
-    "administrative",
   ];
 
   if (
-    geographicResultTypes.some(
+    forbiddenResultTypes.some(
       (type) =>
         resultType === type ||
-        resultType.includes(
-          type
-        )
+        resultType.includes(type)
     )
   ) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 4. CATEGORÍAS DE CALLES / VÍAS                                 */
-  /* -------------------------------------------------------------- */
-
-  const streetCategoryPrefixes = [
-    "highway.",
-    "street.",
-    "road.",
-    "route.",
-    "transport.",
-    "place.city",
-    "place.town",
-    "place.village",
-    "place.neighbourhood",
-    "place.suburb",
-    "administrative.",
-    "boundary.",
-  ];
-
-  if (
-    categories.some(
-      (category) =>
-        streetCategoryPrefixes.some(
-          (prefix) =>
-            category.startsWith(
-              prefix
-            )
-        )
-    )
-  ) {
-    return true;
-  }
-
-  /* -------------------------------------------------------------- */
-  /* 5. NOMBRE IGUAL A LA CALLE                                     */
-  /* -------------------------------------------------------------- */
-
+  /*
+   * Si el nombre coincide con la calle
+   * informada por Geoapify.
+   *
+   * Esto atrapa específicamente casos
+   * como:
+   *
+   * Darregueira
+   * Obispo Oro
+   * Cantero
+   */
   if (
     street &&
-    nameNorm ===
-      normalizeText(street)
+    name === street
   ) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 6. NOMBRE IGUAL AL BARRIO                                      */
-  /* -------------------------------------------------------------- */
+  /*
+   * Nunca permitir que una dirección
+   * aparezca como establecimiento.
+   */
+  if (
+    addressLine1 &&
+    name === addressLine1
+  ) {
+    return true;
+  }
 
+  /*
+   * Nunca permitir barrios.
+   */
   if (
     suburb &&
-    nameNorm ===
-      normalizeText(suburb)
+    name === suburb
   ) {
     return true;
   }
 
   if (
     neighbourhood &&
-    nameNorm ===
-      normalizeText(
-        neighbourhood
-      )
+    name === neighbourhood
   ) {
     return true;
   }
 
   if (
     district &&
-    nameNorm ===
-      normalizeText(district)
+    name === district
   ) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 7. NOMBRE IGUAL A LA CIUDAD                                    */
-  /* -------------------------------------------------------------- */
-
+  /*
+   * Nunca permitir ciudades.
+   */
   if (
     city &&
-    nameNorm ===
-      normalizeText(city)
+    name === city
   ) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 8. NOMBRE IGUAL A LA DIRECCIÓN                                  */
-  /* -------------------------------------------------------------- */
-
+  /*
+   * Nombres que son solamente números.
+   */
   if (
-    addressLine1 &&
-    nameNorm ===
-      normalizeText(
-        addressLine1
-      )
+    /^\d{1,6}$/.test(name)
   ) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 9. DETECTAR NOMBRES QUE SON CLARAMENTE CALLES                   */
-  /*                                                                    */
-  /* Ejemplos:                                                        */
-  /* "Darregueira"                                                    */
-  /* "Obispo Oro"                                                     */
-  /* "Av. Santa Fe"                                                   */
-  /* "Avenida Córdoba"                                                */
-  /* "Calle X"                                                        */
-  /* "Ruta 9"                                                         */
-  /* ---------------------------------------------------------------- */
-
-  const obviousStreetPatterns = [
-    /^av\.?\s+/i,
-    /^avenida\s+/i,
-    /^calle\s+/i,
-    /^ruta\s+/i,
-    /^autopista\s+/i,
-    /^camino\s+/i,
-    /^boulevard\s+/i,
-    /^bulevar\s+/i,
-    /^pasaje\s+/i,
-    /^pje\.?\s+/i,
-    /^diag\.?\s+/i,
-    /^diagonal\s+/i,
-    /^circunvalacion\s+/i,
-    /^rn\s*\d+/i,
-    /^rp\s*\d+/i,
-    /^autovia\s+/i,
-  ];
-
+  /*
+   * Patrones típicos de direcciones.
+   */
   if (
-    obviousStreetPatterns.some(
-      (pattern) =>
-        pattern.test(name)
+    /^(calle|avenida|av|ruta|camino|pasaje|pje|boulevard|bulevar)\s+/i.test(
+      name
     )
   ) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 10. NOMBRE CON NÚMERO DE ALTURA                                 */
-  /*                                                                    */
-  /* "Darregueira 1200"                                               */
-  /* "Av. Santa Fe 1500"                                              */
-  /* ---------------------------------------------------------------- */
-
+  /*
+   * Si el nombre tiene formato
+   * "Nombre 123" y además no tiene
+   * información comercial clara,
+   * lo consideramos sospechoso.
+   */
   if (
-    /\b\d{2,5}\b/.test(name)
-  ) {
-    /*
-     * Si el nombre además contiene
-     * indicios de vía, lo descartamos.
-     */
-    const streetWords =
-      /\b(av|avenida|calle|ruta|autopista|camino|boulevard|bulevar|pasaje|diagonal)\b/i;
-
-    if (
-      streetWords.test(name)
-    ) {
-      return true;
-    }
-  }
-
-  /* -------------------------------------------------------------- */
-  /* 11. SIN CATEGORÍA REAL DE LUGAR                                 */
-  /* ---------------------------------------------------------------- */
-
-  const hasRealPlaceCategory =
-    categories.some(
-      (category) =>
-        category.startsWith(
-          "catering."
-        ) ||
-        category.startsWith(
-          "entertainment."
-        ) ||
-        category.startsWith(
-          "leisure."
-        ) ||
-        category.startsWith(
-          "tourism."
-        )
-    );
-
-  if (
-    !hasRealPlaceCategory
+    /\s\d{1,5}$/.test(name) &&
+    !props.datasource?.raw?.shop &&
+    !props.datasource?.raw?.amenity
   ) {
     return true;
   }
 
-  /* -------------------------------------------------------------- */
-  /* 12. SI LLEGA HASTA ACÁ, LO CONSIDERAMOS UN LUGAR               */
-  /* ---------------------------------------------------------------- */
-
   return false;
 }
 
-/* ------------------------------------------------------------------ */
-/* CONVERTIR FEATURE EN LUGAR                                         */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// VALIDACIÓN EXTRA DEL NOMBRE
+//
+// Esta es la defensa adicional contra calles como
+// "Darregueira".
+//
+// Consultamos el nombre del candidato en el
+// geocodificador y verificamos qué tipo de
+// resultado devuelve.
+//
+// Si el nombre corresponde a una calle,
+// ruta, barrio, ciudad, etc., se descarta.
+// ---------------------------------------------------------------
+
+async function validatePlaceName(
+  name,
+  props
+) {
+  const cleanName =
+    String(name || "").trim();
+
+  if (!cleanName) {
+    return false;
+  }
+
+  const city =
+    props.city ||
+    props.suburb ||
+    props.district ||
+    "";
+
+  const state =
+    props.state || "";
+
+  const query = [
+    cleanName,
+    city,
+    state,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  try {
+    const url =
+      "https://api.geoapify.com/v1/geocode/search" +
+      `?text=${encodeURIComponent(query)}` +
+      "&limit=5" +
+      "&format=json" +
+      `&apiKey=${GEOAPIFY_KEY}`;
+
+    const res = await fetch(url);
+
+    if (!res.ok) {
+      /*
+       * Si la validación secundaria falla,
+       * NO bloqueamos el lugar.
+       *
+       * La validación principal continúa
+       * protegiendo el resultado.
+       */
+      return true;
+    }
+
+    const data = await res.json();
+
+    const results = Array.isArray(
+      data.results
+    )
+      ? data.results
+      : [];
+
+    if (!results.length) {
+      return true;
+    }
+
+    const normalizedName =
+      normalizeText(cleanName);
+
+    /*
+     * Buscamos coincidencias exactas.
+     */
+    const exactMatches =
+      results.filter((r) => {
+        return (
+          normalizeText(r.name) ===
+          normalizedName
+        );
+      });
+
+    if (!exactMatches.length) {
+      /*
+       * No hay una coincidencia clara
+       * con una calle. No bloqueamos.
+       */
+      return true;
+    }
+
+    const forbiddenTypes = [
+      "street",
+      "road",
+      "highway",
+      "path",
+      "way",
+      "route",
+      "avenue",
+      "suburb",
+      "neighbourhood",
+      "district",
+      "city",
+      "municipality",
+      "county",
+      "state",
+      "country",
+      "postcode",
+    ];
+
+    /*
+     * Si TODOS los resultados exactos son
+     * entidades geográficas y ninguno es
+     * un POI/establecimiento, descartamos.
+     */
+    const hasForbiddenOnly =
+      exactMatches.every((r) => {
+        const type =
+          normalizeText(
+            r.result_type
+          );
+
+        return forbiddenTypes.some(
+          (forbidden) =>
+            type === forbidden ||
+            type.includes(forbidden)
+        );
+      });
+
+    if (hasForbiddenOnly) {
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    /*
+     * No hacemos fallar toda la búsqueda
+     * porque falle una validación secundaria.
+     */
+    console.warn(
+      "Validación secundaria falló:",
+      cleanName
+    );
+
+    return true;
+  }
+}
+
+
+// ---------------------------------------------------------------
+// MAPEO FINAL
+// ---------------------------------------------------------------
 
 function mapFeatureToVenue(
   feature,
   center
 ) {
   const props =
-    feature.properties || {};
+    feature?.properties || {};
 
   const categories =
-    Array.isArray(
-      props.categories
-    )
+    Array.isArray(props.categories)
       ? props.categories
       : [];
 
@@ -1057,13 +995,19 @@ function mapFeatureToVenue(
       ? feature.geometry.coordinates
       : [null, null];
 
-  const [lon, lat] =
-    coords;
+  const [lon, lat] = coords;
 
   if (
     typeof lat !== "number" ||
     typeof lon !== "number"
   ) {
+    return null;
+  }
+
+  const name =
+    String(props.name || "").trim();
+
+  if (!name) {
     return null;
   }
 
@@ -1075,31 +1019,12 @@ function mapFeatureToVenue(
       lon
     );
 
-  const name =
-    String(
-      props.name || ""
-    ).trim();
-
-  /*
-   * Nunca usamos address_line1
-   * como nombre.
-   */
-  if (!name) {
-    return null;
-  }
-
-  const hours =
-    parseSimpleHours(
-      props.opening_hours
-    );
-
-  const distMin =
-    Math.max(
-      1,
-      Math.round(
-        (distKm / 4.5) * 60
-      )
-    );
+  const distMin = Math.max(
+    1,
+    Math.round(
+      (distKm / 4.5) * 60
+    )
+  );
 
   return {
     name,
@@ -1108,55 +1033,41 @@ function mapFeatureToVenue(
       emojiFor(categories),
 
     price:
-      estimatePrice(
-        categories
-      ),
+      estimatePrice(categories),
 
     /*
-     * Geoapify no siempre proporciona
-     * una valoración fiable.
-     *
-     * Mantenemos este valor para no
-     * romper el contrato del frontend.
+     * No inventamos ratings.
+     * Se mantiene el valor que esperaba
+     * el frontend.
      */
     rating: 4.2,
 
-    dist:
-      distMin,
+    dist: distMin,
 
     mood:
-      estimateMood(
-        categories
-      ),
+      estimateMood(categories),
 
     outdoor:
-      estimateOutdoor(
-        categories
-      ),
+      estimateOutdoor(categories),
 
     kidFriendly:
-      estimateKidFriendly(
-        categories
-      ),
+      estimateKidFriendly(categories),
 
     nightOnly:
-      estimateNightOnly(
-        categories
-      ),
+      estimateNightOnly(categories),
 
     slots:
-      estimateSlots(
-        categories
-      ),
+      estimateSlots(categories),
 
     why: null,
 
     address:
-      cleanAddress(
-        props
-      ),
+      cleanAddress(props),
 
-    hours,
+    hours:
+      parseSimpleHours(
+        props.opening_hours
+      ),
 
     categories,
 
@@ -1165,31 +1076,26 @@ function mapFeatureToVenue(
   };
 }
 
-/* ------------------------------------------------------------------ */
-/* HANDLER                                                             */
-/* ------------------------------------------------------------------ */
+
+// ---------------------------------------------------------------
+// HANDLER
+// ---------------------------------------------------------------
 
 export default async function handler(
   req,
   res
 ) {
-  if (
-    req.method !== "POST"
-  ) {
+  if (req.method !== "POST") {
     res.status(405).json({
-      error:
-        "method-not-allowed",
+      error: "method-not-allowed",
     });
-
     return;
   }
 
   if (!GEOAPIFY_KEY) {
     res.status(500).json({
-      error:
-        "missing-geoapify-key",
+      error: "missing-geoapify-key",
     });
-
     return;
   }
 
@@ -1204,23 +1110,19 @@ export default async function handler(
     !city.trim()
   ) {
     res.status(400).json({
-      error:
-        "missing-city",
+      error: "missing-city",
     });
-
     return;
   }
 
   const categories =
-    INTENT_CATEGORIES[
-      intent
-    ] ||
+    INTENT_CATEGORIES[intent] ||
     INTENT_CATEGORIES.general;
 
   try {
-    /* -------------------------------------------------------------- */
-    /* GEOCODIFICAR UBICACIÓN                                         */
-    /* -------------------------------------------------------------- */
+    // -------------------------------------------------------------
+    // 1. GEOCODIFICAR UBICACIÓN
+    // -------------------------------------------------------------
 
     const location =
       await geocodeLocation(
@@ -1237,99 +1139,169 @@ export default async function handler(
       return;
     }
 
-    /* -------------------------------------------------------------- */
-    /* BUSCAR LUGARES                                                  */
-    /* -------------------------------------------------------------- */
+
+    // -------------------------------------------------------------
+    // 2. BUSCAR CANDIDATOS
+    // -------------------------------------------------------------
 
     const features =
       await searchPlaces({
-        lat:
-          location.lat,
-
-        lon:
-          location.lon,
-
+        lat: location.lat,
+        lon: location.lon,
         categories,
+        limit: 40,
       });
 
-    const seen =
-      new Set();
 
-    const places =
-      features
+    // -------------------------------------------------------------
+    // 3. FILTROS PRINCIPALES
+    // -------------------------------------------------------------
 
-        /* -------------------------------------------------------- */
-        /* 1. CATEGORÍA CORRECTA                                    */
-        /* -------------------------------------------------------- */
-
-        .filter(
-          (feature) =>
-            featureMatchesIntent(
-              feature,
-              categories
-            )
+    const candidates = features
+      /*
+       * SOLAMENTE categorías correspondientes
+       * al intent.
+       */
+      .filter((feature) =>
+        featureMatchesIntent(
+          feature,
+          categories
         )
+      )
 
-        /* -------------------------------------------------------- */
-        /* 2. ELIMINAR CALLES / DIRECCIONES / CIUDADES              */
-        /* -------------------------------------------------------- */
+      /*
+       * ELIMINAR calles, barrios,
+       * ciudades y direcciones.
+       */
+      .filter(
+        (feature) =>
+          !looksLikeStreetOrAddress(
+            feature
+          )
+      );
 
-        .filter(
-          (feature) =>
-            !looksLikeOnlyAnAddress(
-              feature
-            )
-        )
 
-        /* -------------------------------------------------------- */
-        /* 3. MAPEAR                                                 */
-        /* -------------------------------------------------------- */
+    // -------------------------------------------------------------
+    // 4. VALIDACIÓN SECUNDARIA
+    //
+    // Importante:
+    // hacemos la comprobación ANTES de
+    // convertir definitivamente el resultado.
+    // -------------------------------------------------------------
 
-        .map(
-          (feature) =>
-            mapFeatureToVenue(
-              feature,
-              location
-            )
-        )
+    const validated = [];
 
-        .filter(Boolean)
+    /*
+     * Limitamos la cantidad de consultas
+     * secundarias para no hacer una cantidad
+     * innecesaria de requests.
+     */
+    for (
+      const feature of candidates.slice(0, 15)
+    ) {
+      const props =
+        feature?.properties || {};
 
-        /* -------------------------------------------------------- */
-        /* 4. EVITAR DUPLICADOS                                      */
-        /* -------------------------------------------------------- */
+      const name =
+        String(
+          props.name || ""
+        ).trim();
 
-        .filter(
-          (place) => {
-            const key =
-              `${normalizeText(
-                place.name
-              )}|${normalizeText(
-                place.address || ""
-              )}`;
+      if (!name) {
+        continue;
+      }
 
-            if (
-              seen.has(key)
-            ) {
-              return false;
-            }
-
-            seen.add(key);
-
-            return true;
-          }
+      const valid =
+        await validatePlaceName(
+          name,
+          props
         );
 
-    /* -------------------------------------------------------------- */
-    /* RESPUESTA                                                       */
-    /* -------------------------------------------------------------- */
+      if (!valid) {
+        console.warn(
+          "Lugar descartado por parecer calle:",
+          name
+        );
+
+        continue;
+      }
+
+      validated.push(feature);
+    }
+
+
+    // -------------------------------------------------------------
+    // 5. MAPEAR
+    // -------------------------------------------------------------
+
+    const seen = new Set();
+
+    const places =
+      validated
+        .map((feature) =>
+          mapFeatureToVenue(
+            feature,
+            location
+          )
+        )
+        .filter(Boolean)
+
+        /*
+         * Segunda protección:
+         * nunca dejar pasar calles después
+         * del mapeo.
+         */
+        .filter((place) => {
+          const name =
+            normalizeText(
+              place.name
+            );
+
+          if (
+            /^(calle|avenida|av|ruta|camino|pasaje|pje|boulevard|bulevar)\s+/i.test(
+              name
+            )
+          ) {
+            return false;
+          }
+
+          return true;
+        })
+
+        /*
+         * No repetir lugares.
+         */
+        .filter((place) => {
+          const key =
+            `${normalizeText(
+              place.name
+            )}|${normalizeText(
+              place.address || ""
+            )}`;
+
+          if (seen.has(key)) {
+            return false;
+          }
+
+          seen.add(key);
+
+          return true;
+        });
+
+
+    // -------------------------------------------------------------
+    // 6. RESPUESTA
+    //
+    // IMPORTANTE:
+    // NO rellenamos artificialmente hasta 3.
+    // Si solo hay 2 lugares válidos,
+    // devolvemos 2.
+    // -------------------------------------------------------------
 
     res.status(200).json({
       city,
-
       resolvedCity:
         location.label,
-
       places,
     });
   } catch (err) {
