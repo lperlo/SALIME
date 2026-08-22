@@ -1,4 +1,3 @@
-
 // api/interpretar.js
 //
 // Endpoint serverless (Vercel) para SALIME.
@@ -24,6 +23,29 @@
 //   "Güemes, Córdoba" en vez de "Güemes" a secas, no se reconocía
 //   como ubicación conocida y se mandaba tal cual a geocodificar,
 //   dando resultados inconsistentes.
+//
+// Cambios de ESTA corrección (bugs reportados en prueba real —
+// SEGUNDA VEZ que se reaplican, se habían perdido de una versión
+// anterior del archivo):
+// - Se corrigió la capitalización de ubicaciones no conocidas
+//   ("CóRdoba, CóRdoba" en vez de "Córdoba, Córdoba"). La causa era
+//   el patrón /\b\w/g: en JavaScript \w NO incluye letras
+//   acentuadas, así que después de una tilde (ej. la "ó" de
+//   "córdoba") el motor de regex vuelve a considerar que empieza
+//   una palabra nueva y capitaliza también la letra siguiente. Se
+//   reemplazó por un patrón que capitaliza la letra que sigue al
+//   inicio de la cadena o a un espacio/guión, usando \p{L} (que sí
+//   incluye letras acentuadas) en vez de \w, así no depende de la
+//   definición de "palabra" de \w.
+// - Se agregó "divertido"/"algo divertido"/"diversión" como
+//   disparador de intent "fiesta". Antes, "divertido" solo activaba
+//   mood: Animado pero NO afectaba el intent, que caía en
+//   "general" (categorías muy amplias: restaurantes, cafés, museos,
+//   parques), lo que dejaba margen para que lugares mal
+//   categorizados en la fuente de datos (ej. un kiosco) se colaran
+//   en el resultado. Ahora "algo divertido" resuelve a intent
+//   "fiesta" (categorías más específicas: boliches, bares, pubs),
+//   consistente con que ya disparaba mood Animado.
 
 const SYSTEM_INSTRUCTIONS = `
 Sos el módulo de interpretación de intención de SALIME, una aplicación que arma planes de salida.
@@ -101,7 +123,7 @@ Identificá qué quiere hacer principalmente el usuario.
 - "museo", "exposición", "arte", "cultural", "cultura", "teatro", "algo cultural" → "cultura"
 - "pasear", "caminar", "dar una vuelta", "recorrer", "salir a pasear" → "paseo"
 - "aire libre", "al aire libre", "naturaleza", "parque", "plaza", "estar afuera" → "aire_libre"
-- "fiesta", "boliche", "bailar", "salir de fiesta" → "fiesta"
+- "fiesta", "boliche", "bailar", "salir de fiesta", "divertido", "algo divertido", "diversión" → "fiesta"
 - "con chicos", "con niños", "con mis hijos", "plan familiar" → "familia"
 
 Si no existe una intención principal clara → "general".
@@ -237,6 +259,26 @@ function normalizeForComparison(raw) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+/**
+ * Capitaliza la primera letra de cada palabra de una cadena en
+ * minúsculas, incluyendo letras acentuadas (á, é, í, ó, ú, ñ).
+ *
+ * No usa /\b\w/g porque en JavaScript \w NO incluye letras
+ * acentuadas: después de una tilde (ej. la "ó" de "córdoba") el
+ * motor de regex vuelve a considerar que ahí empieza una palabra
+ * nueva, y termina capitalizando también la letra siguiente
+ * ("CóRdoba" en vez de "Córdoba"). En cambio, este patrón busca la
+ * letra (\p{L}, que sí incluye acentuadas) que sigue al inicio de
+ * la cadena o a un espacio/guión, así no depende de esa definición
+ * de "palabra".
+ */
+function capitalizeWords(lowerText) {
+  return lowerText.replace(
+    /(^|[\s-])(\p{L})/gu,
+    (_match, sep, letter) => sep + letter.toUpperCase()
+  );
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "método no permitido" });
@@ -330,7 +372,6 @@ export default async function handler(req, res) {
       .trim();
 
     const parsed = JSON.parse(clean);
-    console.log("DEBUG:", JSON.stringify(parsed));
 
     // ---------------------------------------------------------------
     // Normalización final del contrato
@@ -456,9 +497,7 @@ export default async function handler(req, res) {
 
       location =
         (matchedKnown && knownLocations[matchedKnown]) ||
-        rawLocation
-          .toLowerCase()
-          .replace(/\b\w/g, (char) => char.toUpperCase());
+        capitalizeWords(rawLocation.toLowerCase());
     }
 
     // ---------------------------------------------------------------
