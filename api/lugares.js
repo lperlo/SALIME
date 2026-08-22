@@ -3,11 +3,11 @@
 /*                                                                    */
 /* Busca lugares REALES con Geoapify para una ubicación + intención.  */
 /*                                                                    */
-/* IMPORTANTE:                                                        */
-/* - No usa type=city para barrios.                                    */
-/* - Güemes se resuelve como barrio de Córdoba, Argentina.            */
-/* - Nunca inventa lugares.                                            */
-/* - Respeta la intención solicitada.                                  */
+/* Reglas:                                                            */
+/* - No inventa lugares.                                              */
+/* - Los barrios de Córdoba se resuelven como zonas, no como ciudades. */
+/* - El tipo de lugar debe coincidir con la intención.                */
+/* - Para "comer" NO permite plazas, parques ni lugares naturales.    */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
@@ -66,9 +66,6 @@ const INTENT_CATEGORIES = {
 
 /* ------------------------------------------------------------------ */
 /* UBICACIONES CONOCIDAS                                              */
-/*                                                                    */
-/* Estas son zonas/barrios de Córdoba.                                */
-/* No deben tratarse como ciudades independientes.                   */
 /* ------------------------------------------------------------------ */
 
 const KNOWN_CORDOBA_ZONES = {
@@ -89,6 +86,146 @@ function normalizeText(value) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 }
+
+/* ------------------------------------------------------------------ */
+/* FILTRO ESTRICTO POR INTENCIÓN                                      */
+/* ------------------------------------------------------------------ */
+
+function matchesIntent(categories, intent) {
+  const cats = Array.isArray(categories)
+    ? categories
+    : [];
+
+  /*
+   * COMER
+   *
+   * Acá somos deliberadamente estrictos.
+   * Si el usuario pidió comer, solamente aceptamos:
+   *
+   * - catering.restaurant
+   * - catering.fast_food
+   *
+   * Todo lo demás queda afuera.
+   */
+  if (intent === "comer") {
+    return cats.some(
+      (cat) =>
+        cat === "catering.restaurant" ||
+        cat.startsWith("catering.restaurant.") ||
+        cat === "catering.fast_food" ||
+        cat.startsWith("catering.fast_food.")
+    );
+  }
+
+  /*
+   * BEBER
+   */
+  if (intent === "beber") {
+    return cats.some(
+      (cat) =>
+        cat === "catering.bar" ||
+        cat.startsWith("catering.bar.") ||
+        cat === "catering.pub" ||
+        cat.startsWith("catering.pub.") ||
+        cat === "catering.cafe" ||
+        cat.startsWith("catering.cafe.")
+    );
+  }
+
+  /*
+   * CULTURA
+   */
+  if (intent === "cultura") {
+    return cats.some(
+      (cat) =>
+        cat === "entertainment.museum" ||
+        cat.startsWith("entertainment.museum.") ||
+        cat === "entertainment.culture" ||
+        cat.startsWith("entertainment.culture.") ||
+        cat === "tourism.sights" ||
+        cat.startsWith("tourism.sights.")
+    );
+  }
+
+  /*
+   * AIRE LIBRE
+   */
+  if (intent === "aire_libre") {
+    return cats.some(
+      (cat) =>
+        cat === "leisure.park" ||
+        cat.startsWith("leisure.park.") ||
+        cat === "natural.forest" ||
+        cat.startsWith("natural.forest.") ||
+        cat === "natural.water" ||
+        cat.startsWith("natural.water.")
+    );
+  }
+
+  /*
+   * PASEO
+   */
+  if (intent === "paseo") {
+    return cats.some(
+      (cat) =>
+        cat === "leisure.park" ||
+        cat.startsWith("leisure.park.") ||
+        cat === "tourism.sights" ||
+        cat.startsWith("tourism.sights.")
+    );
+  }
+
+  /*
+   * FIESTA
+   */
+  if (intent === "fiesta") {
+    return cats.some(
+      (cat) =>
+        cat === "entertainment.nightclub" ||
+        cat.startsWith("entertainment.nightclub.") ||
+        cat === "catering.bar" ||
+        cat.startsWith("catering.bar.") ||
+        cat === "catering.pub" ||
+        cat.startsWith("catering.pub.")
+    );
+  }
+
+  /*
+   * FAMILIA
+   */
+  if (intent === "familia") {
+    return cats.some(
+      (cat) =>
+        cat === "leisure.park" ||
+        cat.startsWith("leisure.park.") ||
+        cat === "entertainment.museum" ||
+        cat.startsWith("entertainment.museum.") ||
+        cat === "catering.restaurant" ||
+        cat.startsWith("catering.restaurant.")
+    );
+  }
+
+  /*
+   * GENERAL
+   */
+  if (intent === "general") {
+    return cats.some(
+      (cat) =>
+        cat === "catering.restaurant" ||
+        cat.startsWith("catering.restaurant.") ||
+        cat === "catering.cafe" ||
+        cat.startsWith("catering.cafe.") ||
+        cat === "leisure.park" ||
+        cat.startsWith("leisure.park.")
+    );
+  }
+
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* ESTIMACIONES                                                       */
+/* ------------------------------------------------------------------ */
 
 function estimatePrice(categories) {
   const cats = categories || [];
@@ -121,7 +258,9 @@ function estimatePrice(categories) {
     return 2;
   }
 
-  if (cats.some((c) => c.includes("restaurant"))) return 2;
+  if (cats.some((c) => c.includes("restaurant"))) {
+    return 2;
+  }
 
   return 2;
 }
@@ -301,6 +440,10 @@ function emojiFor(categories) {
   return "📍";
 }
 
+/* ------------------------------------------------------------------ */
+/* HORARIOS                                                           */
+/* ------------------------------------------------------------------ */
+
 function parseSimpleHours(raw) {
   if (!raw || typeof raw !== "string") {
     return null;
@@ -321,32 +464,7 @@ function parseSimpleHours(raw) {
 }
 
 /* ------------------------------------------------------------------ */
-/* CATEGORÍAS                                                         */
-/* ------------------------------------------------------------------ */
-
-function matchesIntent(categories, intent) {
-  const cats = categories || [];
-
-  const allowed =
-    INTENT_CATEGORIES[intent] ||
-    INTENT_CATEGORIES.general;
-
-  return cats.some((cat) =>
-    allowed.some(
-      (allowedCat) =>
-        cat === allowedCat ||
-        cat.startsWith(`${allowedCat}.`)
-    )
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* RESOLVER UBICACIÓN                                                  */
-/*                                                                    */
-/* Si llega "Güemes", buscamos explícitamente:                         */
-/* "Güemes, Córdoba, Argentina"                                       */
-/*                                                                    */
-/* NO usamos type=city.                                                */
+/* GEOCODIFICACIÓN                                                    */
 /* ------------------------------------------------------------------ */
 
 async function geocodeLocation(location) {
@@ -387,9 +505,8 @@ async function geocodeLocation(location) {
   }
 
   /*
-   * Para ubicaciones conocidas de Córdoba:
-   * buscamos un resultado que realmente esté asociado
-   * con Córdoba y que mencione la zona solicitada.
+   * Para barrios conocidos, buscamos específicamente
+   * un resultado que esté asociado con Córdoba.
    */
   if (knownQuery) {
     const wanted =
@@ -432,9 +549,6 @@ async function geocodeLocation(location) {
     }
   }
 
-  /*
-   * Para otras ubicaciones usamos el resultado más relevante.
-   */
   const first = results[0];
 
   return {
@@ -448,7 +562,7 @@ async function geocodeLocation(location) {
 }
 
 /* ------------------------------------------------------------------ */
-/* BÚSQUEDA DE LUGARES                                                 */
+/* BÚSQUEDA                                                           */
 /* ------------------------------------------------------------------ */
 
 async function searchPlaces({
@@ -458,10 +572,10 @@ async function searchPlaces({
   limit = 30,
 }) {
   /*
-   * 3,5 km alrededor del barrio/zona.
+   * Radio de 3,5 km.
    *
-   * Es bastante menor que los 15 km anteriores y evita
-   * que la búsqueda se vaya por toda Córdoba.
+   * El filtro por intención se hace DESPUÉS de recibir
+   * los resultados, de manera estricta.
    */
   const url =
     "https://api.geoapify.com/v2/places" +
@@ -552,8 +666,11 @@ function mapFeatureToVenue(
       ? feature.geometry.coordinates
       : [null, null];
 
-  const lon = coordinates[0];
-  const lat = coordinates[1];
+  const lon =
+    coordinates[0];
+
+  const lat =
+    coordinates[1];
 
   const distKm =
     lat != null &&
@@ -623,7 +740,8 @@ function mapFeatureToVenue(
       "Lugar real cercano a la zona indicada",
 
     address:
-      props.formatted || null,
+      props.formatted ||
+      null,
 
     hours:
       parseSimpleHours(
@@ -698,9 +816,6 @@ export default async function handler(
     ];
 
   try {
-    /*
-     * Resolver la ubicación primero.
-     */
     const locationInfo =
       await geocodeLocation(
         location
@@ -716,9 +831,6 @@ export default async function handler(
       return;
     }
 
-    /*
-     * Buscar lugares alrededor de esa ubicación.
-     */
     const features =
       await searchPlaces({
         lat: locationInfo.lat,
@@ -727,13 +839,10 @@ export default async function handler(
       });
 
     /*
-     * Filtrar estrictamente por intención.
+     * FILTRO ESTRICTO.
      *
-     * Ejemplo:
-     * intent=comer
-     * => restaurant / fast_food
-     *
-     * Una plaza NO pasa este filtro.
+     * Esto ocurre antes de convertir los resultados
+     * en lugares para el frontend.
      */
     const places =
       features
@@ -823,4 +932,4 @@ export default async function handler(
         "geoapify-request-failed",
     });
   }
-    }
+}
