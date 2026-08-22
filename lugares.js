@@ -8,7 +8,21 @@
 /* - Nunca inventa lugares.                                           */
 /* - Nunca usa una calle, barrio o ciudad como nombre de un lugar.    */
 /* - Si no encuentra lugares reales, devuelve places: [].             */
-/* - Respeta ciudad/barrio usando el place_id del geocodificador.     */
+/* - Busca por radio alrededor del punto geocodificado.               */
+/*                                                                    */
+/* CORRECCIÓN DE ESTA VERSIÓN (bug reproducido con "Patio Olmos" +    */
+/* intent "fiesta"):                                                  */
+/* searchPlaces ya NO usa el placeId del geocodificador para encerrar */
+/* la búsqueda dentro de ese polígono exacto (filter=place:<id>).     */
+/* Antes, si el geocodificador devolvía el placeId de un punto de     */
+/* interés puntual (ej. el edificio de un shopping), la búsqueda de   */
+/* lugares quedaba encerrada LITERALMENTE dentro de ese edificio.     */
+/* Para categorías que ese edificio no tiene (ej. "entertainment.     */
+/* nightclub" dentro de un shopping), Geoapify devolvía cero          */
+/* resultados, y el plan mostraba "No encontramos un lugar real       */
+/* adecuado" en los tres pasos. Ahora la búsqueda siempre usa un      */
+/* radio (circle, 15km) alrededor del punto, sin importar qué tipo    */
+/* de lugar haya geocodificado (barrio, shopping, ciudad, etc).       */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
@@ -361,25 +375,20 @@ async function geocodeLocation(text) {
 async function searchPlaces({
   lat,
   lon,
-  placeId,
   categories,
   limit = 40,
 }) {
+  // Siempre se busca por radio (15km) alrededor del punto. Ya NO se
+  // usa el placeId del geocodificador para encerrar la búsqueda
+  // dentro de un polígono exacto — ver comentario al inicio del
+  // archivo con el bug concreto que esto causaba.
   const params = new URLSearchParams({
     categories: categories.join(","),
     limit: String(limit),
     bias: `proximity:${lon},${lat}`,
+    filter: `circle:${lon},${lat},15000`,
     apiKey: GEOAPIFY_KEY,
   });
-
-  if (placeId) {
-    params.set("filter", `place:${placeId}`);
-  } else {
-    params.set(
-      "filter",
-      `circle:${lon},${lat},15000`
-    );
-  }
 
   const url =
     `https://api.geoapify.com/v2/places?${params.toString()}`;
@@ -781,7 +790,6 @@ export default async function handler(
       await searchPlaces({
         lat: location.lat,
         lon: location.lon,
-        placeId: location.placeId,
         categories,
       });
 
@@ -857,4 +865,4 @@ export default async function handler(
         "geoapify-request-failed",
     });
   }
-                }
+}
