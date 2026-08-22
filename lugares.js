@@ -309,26 +309,48 @@ async function searchPlaces({ lat, lon, intent, limit = 40 }) {
 /*                                                                    */
 /* Esto es lo que soluciona de raíz el problema de "Darregueyra":     */
 /* en vez de intentar adivinar por tags si algo ES una calle,          */
-/* directamente le preguntamos a OSM qué calles existen alrededor      */
-/* del punto buscado, y descartamos cualquier "lugar" cuyo nombre      */
-/* coincida con el de una calle real cercana. Esto funciona para       */
-/* CUALQUIER calle (Darregueyra, Obispo Oro, la que sea), no solo      */
-/* para nombres específicos que ya conocemos.                          */
+/* directamente le preguntamos a OSM si existe una calle con el        */
+/* mismo nombre MUY CERCA de cada lugar candidato (no de toda la       */
+/* zona: eso sería una consulta enorme que se cuelga y falla en        */
+/* silencio, que era el bug real). Esto funciona para CUALQUIER        */
+/* calle (Darregueyra, Obispo Oro, la que sea), no solo para           */
+/* nombres específicos que ya conocemos.                               */
 /* ------------------------------------------------------------------ */
 
-function buildStreetNamesQuery(lat, lon, radius) {
+const STREET_CHECK_RADIUS_M = 80;
+
+/*
+ * Construye una sola consulta Overpass que revisa, para cada
+ * candidato con coordenadas, si hay una calle con nombre a pocos
+ * metros. Al unir todo en una sola consulta con radios chicos,
+ * evitamos pedir "todas las calles de Buenos Aires" (que es lo que
+ * colgaba la consulta anterior).
+ */
+function buildNearbyStreetsQuery(points, radius) {
+  const parts = points.map(
+    ({ lat, lon }) =>
+      `way["highway"]["name"](around:${radius},${lat},${lon});`
+  );
+
   return `
-[out:json][timeout:25];
+[out:json][timeout:20];
 (
-  way["highway"]["name"](around:${radius},${lat},${lon});
+  ${parts.join("\n")}
 );
 out tags;
 `;
 }
 
-async function fetchNearbyStreetNames(lat, lon, radius) {
+/*
+ * Dado un conjunto de candidatos ya ubicados en el mapa (con lat/lon
+ * calculados), devuelve un Set con los nombres normalizados de
+ * calles reales que están pegadas a alguno de esos puntos.
+ */
+async function fetchStreetNamesNearCandidates(points) {
+  if (!points || points.length === 0) return new Set();
+
   try {
-    const query = buildStreetNamesQuery(lat, lon, radius);
+    const query = buildNearbyStreetsQuery(points, STREET_CHECK_RADIUS_M);
     const data = await runOverpassQuery(query);
     const elements = Array.isArray(data.elements) ? data.elements : [];
 
@@ -351,7 +373,7 @@ async function fetchNearbyStreetNames(lat, lon, radius) {
      * en el resto de los filtros (isStreetOrAddress, etc).
      */
     console.error(
-      "No se pudieron obtener calles cercanas:",
+      "No se pudieron verificar calles cercanas a los candidatos:",
       err && err.message
     );
     return new Set();
@@ -369,6 +391,39 @@ const INFRASTRUCTURE_WORDS =
 
 function looksLikeUrbanInfrastructure(name) {
   return INFRASTRUCTURE_WORDS.test(normalizeText(name));
+}
+
+function getElementCoords(element) {
+  let lat = null;
+  let lon = null;
+
+  if (
+    element.type === "node" &&
+    typeof element.lat === "number" &&
+    typeof element.lon === "number"
+  ) {
+    lat = element.lat;
+    lon = element.lon;
+  }
+
+  if (
+    (element.type === "way" || element.type === "relation") &&
+    element.center
+  ) {
+    lat = Number(element.center.lat);
+    lon = Number(element.center.lon);
+  }
+
+  if (
+    typeof lat !== "number" ||
+    typeof lon !== "number" ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon)
+  ) {
+    return null;
+  }
+
+  return { lat, lon };
 }
 
 function haversineKm(lat1, lon1, lat2, lon2) {
@@ -549,36 +604,10 @@ function mapElementToVenue(element, center) {
   const name = getRealName(element);
   if (!name) return null;
 
-  let lat = null;
-  let lon = null;
+  const coords = getElementCoords(element);
+  if (!coords) return null;
 
-  if (
-    element.type === "node" &&
-    typeof element.lat === "number" &&
-    typeof element.lon === "number"
-  ) {
-    lat = element.lat;
-    lon = element.lon;
-  }
-
-  if (
-    (element.type === "way" || element.type === "relation") &&
-    element.center
-  ) {
-    lat = Number(element.center.lat);
-    lon = Number(element.center.lon);
-  }
-
-  if (
-    typeof lat !== "number" ||
-    typeof lon !== "number" ||
-    !Number.isFinite(lat) ||
-    !Number.isFinite(lon)
-  ) {
-    return null;
-  }
-
-  const distKm = haversineKm(center.lat, center.lon, lat, lon);
+  const distKm = haversineKm(center.lat, center.lon, coords.lat, coords.lon);
   const distMin = Math.max(1, Math.round((distKm / 4.5) * 60));
 
   const hours = tags.opening_hours ? parseSimpleHours(tags.opening_hours) : null;
@@ -633,38 +662,58 @@ export default async function handler(req, res) {
     }
 
     /*
-     * Buscamos lugares y calles cercanas en paralelo. Las calles se
-     * usan después para descartar cualquier "lugar" cuyo nombre
-     * coincida con el de una calle real de la zona.
+     * 1. Buscamos candidatos reales (restaurantes, bares, museos,
+     *    etc.) según el intent.
      */
-    const [elements, nearbyStreetNames] = await Promise.all([
-      searchPlaces({
-        lat: location.lat,
-        lon: location.lon,
-        intent: normalizedIntent,
-        limit: 60,
-      }),
-      fetchNearbyStreetNames(location.lat, location.lon, 15000),
-    ]);
+    const rawElements = await searchPlaces({
+      lat: location.lat,
+      lon: location.lon,
+      intent: normalizedIntent,
+      limit: 60,
+    });
+
+    /*
+     * 2. Filtros básicos: intent correcto, no es calle/dirección por
+     *    sus propios tags, y tiene nombre real.
+     */
+    const basicCandidates = rawElements
+      .filter((element) => matchesIntent(element, normalizedIntent))
+      .filter((element) => !isStreetOrAddress(element))
+      .filter((element) => !!getRealName(element));
+
+    /*
+     * 3. Para cada candidato que sobrevivió, calculamos sus
+     *    coordenadas reales (las necesitamos para el paso 4 y para
+     *    el mapeo final).
+     */
+    const withCoords = basicCandidates
+      .map((element) => ({
+        element,
+        coords: getElementCoords(element),
+      }))
+      .filter((c) => c.coords !== null);
+
+    /*
+     * 4. VERIFICACIÓN CRUZADA: chequeamos, cerca de cada candidato
+     *    puntual (no de toda la zona), si existe una calle real con
+     *    el mismo nombre. Esto es lo que elimina definitivamente
+     *    casos como "Darregueyra" sin necesidad de un parche por
+     *    nombre, y sin colgar la consulta (el bug anterior era pedir
+     *    todas las calles en 15km de radio, lo que se caía por
+     *    timeout y dejaba el filtro sin efecto).
+     */
+    const nearbyStreetNames = await fetchStreetNamesNearCandidates(
+      withCoords.map((c) => c.coords)
+    );
 
     const seen = new Set();
 
-    const places = elements
-      .filter((element) => matchesIntent(element, normalizedIntent))
-      .filter((element) => !isStreetOrAddress(element))
-      .filter((element) => !!getRealName(element))
-      /*
-       * VERIFICACIÓN CRUZADA: si el nombre del "lugar" es en
-       * realidad el nombre de una calle real de la zona, lo
-       * descartamos. Esto es lo que elimina definitivamente casos
-       * como "Darregueyra" sin necesidad de un parche por nombre.
-       */
-      .filter((element) => {
+    const places = withCoords
+      .filter(({ element }) => {
         const name = getRealName(element);
-        if (!name) return false;
         return !nearbyStreetNames.has(normalizeText(name));
       })
-      .map((element) => mapElementToVenue(element, location))
+      .map(({ element }) => mapElementToVenue(element, location))
       .filter(Boolean)
       .filter((place) => {
         const key =
