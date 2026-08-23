@@ -6,6 +6,7 @@ import {
   Wallet,
   Users,
   Sparkles,
+  Clock,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -1611,6 +1612,34 @@ function getSteps({
       ];
     }
 
+    /*
+     * "De día" es una franja genérica (no una tarde explícita).
+     * Igual que en el fallback general (más abajo), la priorizamos
+     * antes que "afternoon" para no convertirla en 17:00.
+     */
+    if (daytimeGeneric) {
+      return [
+        {
+          key: "comer",
+          label: "PARA ARRANCAR",
+          time: "12:30",
+          pool: CENA,
+        },
+        {
+          key: "postre",
+          label: "SEGUIR",
+          time: "14:00",
+          pool: MERIENDA_FAMILIA,
+        },
+        {
+          key: "paseo",
+          label: "PARA TERMINAR",
+          time: "15:30",
+          pool: PASEO,
+        },
+      ];
+    }
+
     if (
       timeBucket === "afternoon"
     ) {
@@ -1939,6 +1968,7 @@ function HomeScreen({
       budget: null,
       people: null,
       vibe: null,
+      when: null,
     });
 
   const understood =
@@ -2012,6 +2042,12 @@ function HomeScreen({
   if (understood.outdoor) {
     understoodChips.push(
       "🌿 Al aire libre"
+    );
+  }
+
+  if (filters.when) {
+    understoodChips.push(
+      `🕐 ${filters.when}`
     );
   }
 
@@ -2107,8 +2143,29 @@ function HomeScreen({
       let daytimeGeneric =
         !!interpreted.daytimeGeneric;
 
-      const explicitHour =
+      let explicitHour =
         interpreted.explicitHour;
+
+      /*
+       * El chip manual "Cuándo" tiene prioridad sobre lo que se haya
+       * interpretado del texto libre, igual que ya pasa con "Dónde"
+       * y "Con quién".
+       */
+      if (filters.when) {
+        morning = false;
+        afternoon = false;
+        night = false;
+        daytimeGeneric = false;
+        explicitHour = null;
+
+        if (filters.when === "De día") {
+          daytimeGeneric = true;
+        } else if (filters.when === "A la tarde") {
+          afternoon = true;
+        } else if (filters.when === "De noche") {
+          night = true;
+        }
+      }
 
       /*
        * Una hora exacta tiene prioridad.
@@ -2371,6 +2428,25 @@ function HomeScreen({
             setFilters((f) => ({
               ...f,
               vibe: v,
+            }))
+          }
+        />
+
+        <Chip
+          icon={Clock}
+          placeholder="Cuándo"
+          value={
+            filters.when
+          }
+          options={[
+            "De día",
+            "A la tarde",
+            "De noche",
+          ]}
+          onChange={(v) =>
+            setFilters((f) => ({
+              ...f,
+              when: v,
             }))
           }
         />
