@@ -166,24 +166,34 @@ Categorías permitidas (elegí UNA por lugar, tal cual está escrita):
 ${allowedCategories.map((c) => `- ${c}`).join("\n")}
 
 Reglas obligatorias:
-1. Devolvé SOLO lugares reales que existan hoy en esa ciudad o zona. Si no estás
-   seguro de que un lugar existe realmente, no lo incluyas.
-2. Es preferible devolver menos lugares (incluso 2 o 3) a inventar uno.
-3. No repitas siempre los mismos lugares típicos: variá la selección dentro de
+1. Devolvé SOLO lugares reales que existan HOY, con local físico abierto al
+   público, en esa ciudad o zona. Si tenés cualquier duda de que un lugar siga
+   existiendo o de que sea real, NO lo incluyas.
+2. Excluí explícitamente: locales que sean solo delivery/take away sin salón
+   ni mesas, dark kitchens/cocinas fantasma, virtual restaurants, y cualquier
+   lugar al que una persona no pueda ir físicamente a sentarse o visitar.
+3. Es preferible devolver pocos lugares (incluso 2 o 3, o ninguno) a incluir
+   uno del que no estés seguro.
+4. No repitas siempre los mismos lugares típicos: variá la selección dentro de
    la zona pedida.
-4. Todos los lugares deben estar dentro de "${city}" o su zona inmediata, no en
+5. Todos los lugares deben estar dentro de "${city}" o su zona inmediata, no en
    otra parte de la ciudad.
-5. Respondé ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown,
+6. Para la dirección: solo escribí calle y altura si estás realmente seguro de
+   que es correcta. Si no estás seguro de la dirección exacta, escribí
+   únicamente el barrio/zona conocida (por ejemplo "Nueva Córdoba") en vez de
+   inventar una calle y altura. Nunca inventes un número de puerta.
+7. Respondé ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown,
    con esta forma exacta:
 
 {
   "resolvedCity": "nombre de la ciudad/zona interpretada",
   "places": [
-    { "name": "...", "address": "calle y altura o zona conocida", "category": "una de las categorías permitidas" }
+    { "name": "...", "address": "calle y altura solo si estás seguro, o el barrio/zona si no", "category": "una de las categorías permitidas" }
   ]
 }
 
-Devolvé entre 4 y 8 lugares si podés garantizar que son reales.`;
+Devolvé entre 4 y 8 lugares si podés garantizar que son reales. Si solo podés
+garantizar 2 o 3, devolvé esos.`;
 }
 
 async function askGeminiForPlaces({ city, intent }) {
@@ -200,7 +210,7 @@ async function askGeminiForPlaces({ city, intent }) {
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        temperature: 0.4,
+        temperature: 0.15,
         responseMimeType: "application/json",
       },
     }),
