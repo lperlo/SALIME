@@ -1,31 +1,25 @@
-
 /* ------------------------------------------------------------------ */
 /* api/lugares.js                                                     */
 /*                                                                    */
-/* Busca lugares REALES (Geoapify) para una ciudad o barrio +         */
-/* intención.                                                        */
+/* Busca lugares REALES con Geoapify.                                 */
 /*                                                                    */
-/ * IMPORTANTE:                                                       */
-/* - No inventa lugares.                                              */
-/* - Resuelve barrios conocidos dentro de su ciudad.                  */
-/* - No trata Güemes como una ciudad independiente.                   */
-/* - Filtra los resultados según la intención.                       */
-/* - La API key vive únicamente en Vercel.                            */
+/* Esta versión prioriza establecimientos gastronómicos reales        */
+/* cuando la intención es "comer" y resuelve barrios conocidos        */
+/* dentro de su ciudad.                                               */
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
 
-/*
- * ------------------------------------------------------------------
- * INTENCIÓN -> CATEGORÍAS GEOAPIFY
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* INTENCIÓN -> CATEGORÍAS                                             */
+/* ------------------------------------------------------------------ */
 
 const INTENT_CATEGORIES = {
   comer: [
     "catering.restaurant",
     "catering.fast_food",
     "catering.food_court",
+    "catering.cafe",
   ],
 
   beber: [
@@ -70,18 +64,12 @@ const INTENT_CATEGORIES = {
   ],
 };
 
-/*
- * ------------------------------------------------------------------
- * BARRIOS CONOCIDOS
- * ------------------------------------------------------------------
- *
- * Estos NO se envían a Geoapify como ciudades.
- *
- * Se convierten en una búsqueda contextualizada dentro de Córdoba.
- */
+/* ------------------------------------------------------------------ */
+/* BARRIOS CONOCIDOS                                                   */
+/* ------------------------------------------------------------------ */
 
 const KNOWN_NEIGHBORHOODS = {
-  "guemes": {
+  guemes: {
     name: "Güemes",
     city: "Córdoba, Argentina",
   },
@@ -101,12 +89,12 @@ const KNOWN_NEIGHBORHOODS = {
     city: "Córdoba, Argentina",
   },
 
-  "alberdi": {
+  alberdi: {
     name: "Alberdi",
     city: "Córdoba, Argentina",
   },
 
-  "cofico": {
+  cofico: {
     name: "Cofico",
     city: "Córdoba, Argentina",
   },
@@ -116,12 +104,12 @@ const KNOWN_NEIGHBORHOODS = {
     city: "Córdoba, Argentina",
   },
 
-  "arguello": {
+  arguello: {
     name: "Argüello",
     city: "Córdoba, Argentina",
   },
 
-  "jardin": {
+  jardin: {
     name: "Jardín",
     city: "Córdoba, Argentina",
   },
@@ -136,22 +124,20 @@ const KNOWN_NEIGHBORHOODS = {
     city: "Córdoba, Argentina",
   },
 
-  "observatorio": {
+  observatorio: {
     name: "Observatorio",
     city: "Córdoba, Argentina",
   },
 
-  "centro": {
+  centro: {
     name: "Centro",
     city: "Córdoba, Argentina",
   },
 };
 
-/*
- * ------------------------------------------------------------------
- * NORMALIZACIÓN DE TEXTO
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* UTILIDADES                                                          */
+/* ------------------------------------------------------------------ */
 
 function normalizeText(value) {
   return String(value || "")
@@ -161,40 +147,22 @@ function normalizeText(value) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-/*
- * ------------------------------------------------------------------
- * DETECTAR BARRIO
- * ------------------------------------------------------------------
- */
-
 function findKnownNeighborhood(location) {
   const normalized = normalizeText(location);
 
-  /*
-   * Primero intentamos coincidencia exacta.
-   */
   if (KNOWN_NEIGHBORHOODS[normalized]) {
     return KNOWN_NEIGHBORHOODS[normalized];
   }
 
-  /*
-   * Después permitimos frases como:
-   * "barrio Güemes"
-   * "zona Güemes"
-   * "Güemes, Córdoba"
-   */
-  const keys = Object.keys(
-    KNOWN_NEIGHBORHOODS
-  ).sort(
+  const keys = Object.keys(KNOWN_NEIGHBORHOODS).sort(
     (a, b) => b.length - a.length
   );
 
   for (const key of keys) {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     const pattern = new RegExp(
-      `(^|\\s|,)${key.replace(
-        /\s+/g,
-        "\\s+"
-      )}(\\s|,|$)`
+      `(^|\\s|,)${escaped}(\\s|,|$)`
     );
 
     if (pattern.test(normalized)) {
@@ -205,120 +173,91 @@ function findKnownNeighborhood(location) {
   return null;
 }
 
-/*
- * ------------------------------------------------------------------
- * GEOCODIFICACIÓN DE CIUDAD / BARRIO
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* GEOCODIFICACIÓN                                                     */
+/* ------------------------------------------------------------------ */
 
 async function geocodeLocation(location) {
-  const neighborhood =
-    findKnownNeighborhood(location);
+  const neighborhood = findKnownNeighborhood(location);
 
   /*
-   * --------------------------------------------------------------
-   * CASO BARRIO CONOCIDO
-   * --------------------------------------------------------------
+   * BARRIO:
    *
-   * No usamos type=city.
-   *
-   * Buscamos el barrio junto con Córdoba, Argentina.
+   * Buscamos el nombre del barrio junto con Córdoba.
+   * NO usamos type=city.
    */
   if (neighborhood) {
-    const text =
-      `${neighborhood.name}, ${neighborhood.city}`;
+    const queries = [
+      `${neighborhood.name}, Córdoba, Argentina`,
+      `${neighborhood.name}, Cordoba, Argentina`,
+    ];
 
-    const url =
-      "https://api.geoapify.com/v1/geocode/search" +
-      `?text=${encodeURIComponent(text)}` +
-      "&format=json" +
-      "&limit=10" +
-      `&apiKey=${GEOAPIFY_KEY}`;
+    for (const text of queries) {
+      const url =
+        "https://api.geoapify.com/v1/geocode/search" +
+        `?text=${encodeURIComponent(text)}` +
+        "&format=json" +
+        "&limit=10" +
+        `&apiKey=${GEOAPIFY_KEY}`;
 
-    const res = await fetch(url);
+      const res = await fetch(url);
 
-    if (!res.ok) {
-      throw new Error(
-        "geoapify-neighborhood-error"
-      );
-    }
+      if (!res.ok) {
+        throw new Error("geoapify-geocode-error");
+      }
 
-    const data = await res.json();
+      const data = await res.json();
 
-    const results =
-      Array.isArray(data.results)
+      const results = Array.isArray(data.results)
         ? data.results
         : [];
 
-    /*
-     * Buscamos preferentemente un resultado que realmente
-     * esté dentro de Córdoba y que tenga el nombre del barrio.
-     */
-    const wanted =
-      normalizeText(
-        neighborhood.name
-      );
+      const wanted = normalizeText(neighborhood.name);
 
-    const matching =
-      results.find((result) => {
-        const formatted =
-          normalizeText(
-            result.formatted
-          );
+      /*
+       * Buscamos resultados cuyo nombre/suburb/district/formatted
+       * contenga realmente el barrio.
+       */
+      const matching = results.find((result) => {
+        const fields = [
+          result.name,
+          result.suburb,
+          result.district,
+          result.city_district,
+          result.formatted,
+        ]
+          .filter(Boolean)
+          .map(normalizeText);
 
-        const resultName =
-          normalizeText(
-            result.name
-          );
-
-        const suburb =
-          normalizeText(
-            result.suburb
-          );
-
-        const district =
-          normalizeText(
-            result.district
-          );
-
-        return (
-          resultName.includes(wanted) ||
-          suburb.includes(wanted) ||
-          district.includes(wanted) ||
-          formatted.includes(wanted)
+        return fields.some((field) =>
+          field.includes(wanted)
         );
       });
 
-    const first =
-      matching || results[0];
-
-    if (!first) {
-      return null;
+      if (matching) {
+        return {
+          lat: matching.lat,
+          lon: matching.lon,
+          label: matching.formatted || neighborhood.name,
+          type: "neighborhood",
+          neighborhood: neighborhood.name,
+        };
+      }
     }
 
-    return {
-      lat: first.lat,
-      lon: first.lon,
-      label:
-        first.formatted ||
-        neighborhood.name,
-      type: "neighborhood",
-      neighborhood:
-        neighborhood.name,
-    };
+    /*
+     * Si Geoapify no logra encontrar el barrio por nombre,
+     * NO inventamos coordenadas.
+     */
+    return null;
   }
 
   /*
-   * --------------------------------------------------------------
-   * CASO CIUDAD NORMAL
-   * --------------------------------------------------------------
+   * CIUDAD NORMAL.
    */
-
   const url =
     "https://api.geoapify.com/v1/geocode/search" +
-    `?text=${encodeURIComponent(
-      `${location}, Argentina`
-    )}` +
+    `?text=${encodeURIComponent(`${location}, Argentina`)}` +
     "&type=city" +
     "&format=json" +
     "&limit=5" +
@@ -327,16 +266,14 @@ async function geocodeLocation(location) {
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(
-      "geoapify-geocode-error"
-    );
+    throw new Error("geoapify-geocode-error");
   }
 
   const data = await res.json();
 
   const first =
     data &&
-    data.results &&
+    Array.isArray(data.results) &&
     data.results[0];
 
   if (!first) {
@@ -346,32 +283,26 @@ async function geocodeLocation(location) {
   return {
     lat: first.lat,
     lon: first.lon,
-    label:
-      first.formatted ||
-      location,
+    label: first.formatted || location,
     type: "city",
     neighborhood: null,
   };
 }
 
-/*
- * ------------------------------------------------------------------
- * BÚSQUEDA DE LUGARES
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* BÚSQUEDA                                                            */
+/* ------------------------------------------------------------------ */
 
 async function searchPlaces({
   lat,
   lon,
   categories,
-  limit = 30,
+  limit = 50,
 }) {
   const url =
     "https://api.geoapify.com/v2/places" +
-    `?categories=${encodeURIComponent(
-      categories.join(",")
-    )}` +
-    `&filter=circle:${lon},${lat},15000` +
+    `?categories=${encodeURIComponent(categories.join(","))}` +
+    `&filter=circle:${lon},${lat},5000` +
     `&bias=proximity:${lon},${lat}` +
     `&limit=${limit}` +
     `&apiKey=${GEOAPIFY_KEY}`;
@@ -379,9 +310,7 @@ async function searchPlaces({
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(
-      "geoapify-places-error"
-    );
+    throw new Error("geoapify-places-error");
   }
 
   const data = await res.json();
@@ -391,23 +320,22 @@ async function searchPlaces({
     : [];
 }
 
-/*
- * ------------------------------------------------------------------
- * CATEGORÍAS
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* CATEGORÍAS GASTRONÓMICAS                                            */
+/* ------------------------------------------------------------------ */
 
 const FOOD_CATEGORIES = [
   "catering.restaurant",
   "catering.fast_food",
   "catering.food_court",
+  "catering.cafe",
 ];
 
-const NON_FOOD_CATEGORIES = [
+const BAD_FOOD_CATEGORIES = [
   "leisure.park",
-  "leisure.pitch",
-  "leisure.playground",
   "leisure.garden",
+  "leisure.playground",
+  "leisure.pitch",
   "natural.forest",
   "natural.water",
   "natural.beach",
@@ -419,48 +347,27 @@ const NON_FOOD_CATEGORIES = [
   "amenity.kiosk",
 ];
 
-function hasCategory(
-  categories,
-  allowed
-) {
-  return categories.some(
-    (category) =>
-      allowed.includes(category)
+function hasCategory(categories, allowed) {
+  return categories.some((category) =>
+    allowed.includes(category)
   );
 }
 
-function matchesIntent(
-  categories,
-  intent
-) {
-  const cats =
-    Array.isArray(categories)
-      ? categories
-      : [];
+/* ------------------------------------------------------------------ */
+/* FILTRO DE INTENCIÓN                                                 */
+/* ------------------------------------------------------------------ */
+
+function matchesIntent(categories, intent) {
+  const cats = Array.isArray(categories)
+    ? categories
+    : [];
 
   if (intent === "comer") {
-    /*
-     * Para comer tiene que existir una categoría gastronómica.
-     */
-    if (
-      !hasCategory(
-        cats,
-        FOOD_CATEGORIES
-      )
-    ) {
+    if (!hasCategory(cats, FOOD_CATEGORIES)) {
       return false;
     }
 
-    /*
-     * Y no puede estar clasificado como plaza,
-     * parque, kiosco, museo, monumento, etc.
-     */
-    if (
-      hasCategory(
-        cats,
-        NON_FOOD_CATEGORIES
-      )
-    ) {
+    if (hasCategory(cats, BAD_FOOD_CATEGORIES)) {
       return false;
     }
 
@@ -468,114 +375,76 @@ function matchesIntent(
   }
 
   if (intent === "beber") {
-    return hasCategory(
-      cats,
-      [
-        "catering.bar",
-        "catering.pub",
-        "catering.cafe",
-      ]
-    );
+    return hasCategory(cats, [
+      "catering.bar",
+      "catering.pub",
+      "catering.cafe",
+    ]);
   }
 
   if (intent === "cultura") {
-    return hasCategory(
-      cats,
-      [
-        "entertainment.museum",
-        "entertainment.culture",
-        "tourism.sights",
-      ]
-    );
+    return hasCategory(cats, [
+      "entertainment.museum",
+      "entertainment.culture",
+      "tourism.sights",
+    ]);
   }
 
   if (intent === "aire_libre") {
-    return hasCategory(
-      cats,
-      [
-        "leisure.park",
-        "natural.forest",
-        "natural.water",
-      ]
-    );
+    return hasCategory(cats, [
+      "leisure.park",
+      "natural.forest",
+      "natural.water",
+    ]);
   }
 
   if (intent === "paseo") {
-    return hasCategory(
-      cats,
-      [
-        "leisure.park",
-        "tourism.sights",
-      ]
-    );
+    return hasCategory(cats, [
+      "leisure.park",
+      "tourism.sights",
+    ]);
   }
 
   if (intent === "fiesta") {
-    return hasCategory(
-      cats,
-      [
-        "entertainment.nightclub",
-        "catering.bar",
-        "catering.pub",
-      ]
-    );
+    return hasCategory(cats, [
+      "entertainment.nightclub",
+      "catering.bar",
+      "catering.pub",
+    ]);
   }
 
   if (intent === "familia") {
-    return hasCategory(
-      cats,
-      [
-        "leisure.park",
-        "entertainment.museum",
-        "catering.restaurant",
-      ]
-    );
+    return hasCategory(cats, [
+      "leisure.park",
+      "entertainment.museum",
+      "catering.restaurant",
+    ]);
   }
 
-  return hasCategory(
-    cats,
-    [
-      "catering.restaurant",
-      "catering.cafe",
-      "leisure.park",
-    ]
-  );
+  return hasCategory(cats, [
+    "catering.restaurant",
+    "catering.cafe",
+    "leisure.park",
+  ]);
 }
 
-/*
- * ------------------------------------------------------------------
- * DISTANCIA
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* DISTANCIA                                                           */
+/* ------------------------------------------------------------------ */
 
-function haversineKm(
-  lat1,
-  lon1,
-  lat2,
-  lon2
-) {
+function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
 
   const dLat =
-    ((lat2 - lat1) *
-      Math.PI) /
-    180;
+    ((lat2 - lat1) * Math.PI) / 180;
 
   const dLon =
-    ((lon2 - lon1) *
-      Math.PI) /
-    180;
+    ((lon2 - lon1) * Math.PI) / 180;
 
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(
-      (lat1 * Math.PI) /
-        180
-    ) *
-      Math.cos(
-        (lat2 * Math.PI) /
-          180
-      ) *
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) ** 2;
 
   const c =
@@ -588,31 +457,18 @@ function haversineKm(
   return R * c;
 }
 
-/*
- * ------------------------------------------------------------------
- * ESTIMACIONES
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* ESTIMACIONES                                                        */
+/* ------------------------------------------------------------------ */
 
-function estimatePrice(
-  categories
-) {
-  const cats =
-    categories || [];
+function estimatePrice(categories) {
+  const cats = categories || [];
 
-  if (
-    cats.some((c) =>
-      c.includes("fast_food")
-    )
-  ) {
+  if (cats.some((c) => c.includes("fast_food"))) {
     return 1;
   }
 
-  if (
-    cats.some((c) =>
-      c.includes("cafe")
-    )
-  ) {
+  if (cats.some((c) => c.includes("cafe"))) {
     return 1;
   }
 
@@ -626,11 +482,7 @@ function estimatePrice(
     return 1;
   }
 
-  if (
-    cats.some((c) =>
-      c.includes("nightclub")
-    )
-  ) {
+  if (cats.some((c) => c.includes("nightclub"))) {
     return 3;
   }
 
@@ -654,22 +506,15 @@ function estimatePrice(
     return 2;
   }
 
-  if (
-    cats.some((c) =>
-      c.includes("restaurant")
-    )
-  ) {
+  if (cats.some((c) => c.includes("restaurant"))) {
     return 2;
   }
 
   return 2;
 }
 
-function estimateMood(
-  categories
-) {
-  const cats =
-    categories || [];
+function estimateMood(categories) {
+  const cats = categories || [];
 
   if (
     cats.some(
@@ -695,29 +540,19 @@ function estimateMood(
     return ["tranquilo"];
   }
 
-  return [
-    "tranquilo",
-    "animado",
-  ];
+  return ["tranquilo", "animado"];
 }
 
-function estimateOutdoor(
-  categories
-) {
-  return (
-    categories || []
-  ).some(
+function estimateOutdoor(categories) {
+  return (categories || []).some(
     (c) =>
       c.includes("park") ||
       c.includes("natural")
   );
 }
 
-function estimateKidFriendly(
-  categories
-) {
-  const cats =
-    categories || [];
+function estimateKidFriendly(categories) {
+  const cats = categories || [];
 
   if (
     cats.some(
@@ -733,21 +568,14 @@ function estimateKidFriendly(
   return true;
 }
 
-function estimateNightOnly(
-  categories
-) {
-  return (
-    categories || []
-  ).some((c) =>
+function estimateNightOnly(categories) {
+  return (categories || []).some((c) =>
     c.includes("nightclub")
   );
 }
 
-function estimateSlots(
-  categories
-) {
-  const cats =
-    categories || [];
+function estimateSlots(categories) {
+  const cats = categories || [];
 
   if (
     cats.some((c) =>
@@ -764,24 +592,14 @@ function estimateSlots(
         c.includes("pub")
     )
   ) {
-    return [
-      "afternoon",
-      "night",
-    ];
+    return ["afternoon", "night"];
   }
 
-  return [
-    "morning",
-    "afternoon",
-    "night",
-  ];
+  return ["morning", "afternoon", "night"];
 }
 
-function emojiFor(
-  categories
-) {
-  const cats =
-    categories || [];
+function emojiFor(categories) {
+  const cats = categories || [];
 
   if (
     cats.some((c) =>
@@ -862,26 +680,18 @@ function emojiFor(
   return "📍";
 }
 
-/*
- * ------------------------------------------------------------------
- * HORARIOS
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* HORARIOS                                                            */
+/* ------------------------------------------------------------------ */
 
-function parseSimpleHours(
-  raw
-) {
-  if (
-    !raw ||
-    typeof raw !== "string"
-  ) {
+function parseSimpleHours(raw) {
+  if (!raw || typeof raw !== "string") {
     return null;
   }
 
-  const match =
-    raw.match(
-      /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/
-    );
+  const match = raw.match(
+    /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/
+  );
 
   if (!match) {
     return null;
@@ -893,43 +703,29 @@ function parseSimpleHours(
   ];
 }
 
-/*
- * ------------------------------------------------------------------
- * MAPEO DE FEATURE
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* MAPEO                                                               */
+/* ------------------------------------------------------------------ */
 
-function mapFeatureToVenue(
-  feature,
-  locationInfo
-) {
-  const props =
-    feature.properties || {};
+function mapFeatureToVenue(feature, locationInfo) {
+  const props = feature.properties || {};
 
   const categories =
-    Array.isArray(
-      props.categories
-    )
+    Array.isArray(props.categories)
       ? props.categories
       : [];
 
   const coordinates =
     feature.geometry &&
-    Array.isArray(
-      feature.geometry.coordinates
-    )
+    Array.isArray(feature.geometry.coordinates)
       ? feature.geometry.coordinates
       : [null, null];
 
-  const lon =
-    coordinates[0];
-
-  const lat =
-    coordinates[1];
+  const lon = coordinates[0];
+  const lat = coordinates[1];
 
   const distKm =
-    lat != null &&
-    lon != null
+    lat != null && lon != null
       ? haversineKm(
           locationInfo.lat,
           locationInfo.lon,
@@ -938,10 +734,9 @@ function mapFeatureToVenue(
         )
       : null;
 
-  const hours =
-    parseSimpleHours(
-      props.opening_hours
-    );
+  const hours = parseSimpleHours(
+    props.opening_hours
+  );
 
   return {
     name:
@@ -953,18 +748,13 @@ function mapFeatureToVenue(
       emojiFor(categories),
 
     price:
-      estimatePrice(
-        categories
-      ),
+      estimatePrice(categories),
 
     rating:
       props.rank &&
-      typeof props.rank.confidence ===
-        "number"
+      typeof props.rank.confidence === "number"
         ? Math.round(
-            props.rank.confidence *
-              5 *
-              10
+            props.rank.confidence * 5 * 10
           ) / 10
         : 4.2,
 
@@ -972,36 +762,24 @@ function mapFeatureToVenue(
       distKm != null
         ? Math.max(
             1,
-            Math.round(
-              distKm * 12
-            )
+            Math.round(distKm * 12)
           )
         : 10,
 
     mood:
-      estimateMood(
-        categories
-      ),
+      estimateMood(categories),
 
     outdoor:
-      estimateOutdoor(
-        categories
-      ),
+      estimateOutdoor(categories),
 
     kidFriendly:
-      estimateKidFriendly(
-        categories
-      ),
+      estimateKidFriendly(categories),
 
     nightOnly:
-      estimateNightOnly(
-        categories
-      ),
+      estimateNightOnly(categories),
 
     slots:
-      estimateSlots(
-        categories
-      ),
+      estimateSlots(categories),
 
     why:
       props.address_line2 ||
@@ -1013,134 +791,103 @@ function mapFeatureToVenue(
 
     hours,
 
-    source:
-      "geoapify",
+    source: "geoapify",
   };
 }
 
-/*
- * ------------------------------------------------------------------
- * HANDLER
- * ------------------------------------------------------------------
- */
+/* ------------------------------------------------------------------ */
+/* HANDLER                                                             */
+/* ------------------------------------------------------------------ */
 
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   if (req.method !== "POST") {
-    res
-      .status(405)
-      .json({
-        error:
-          "method-not-allowed",
-      });
+    res.status(405).json({
+      error: "method-not-allowed",
+    });
 
     return;
   }
 
   if (!GEOAPIFY_KEY) {
-    res
-      .status(500)
-      .json({
-        error:
-          "missing-geoapify-key",
-      });
+    res.status(500).json({
+      error: "missing-geoapify-key",
+    });
 
     return;
   }
 
-  const {
-    city,
-    intent,
-  } = req.body || {};
+  const { city, intent } = req.body || {};
 
   if (
     !city ||
     typeof city !== "string" ||
     !city.trim()
   ) {
-    res
-      .status(400)
-      .json({
-        error:
-          "missing-city",
-      });
+    res.status(400).json({
+      error: "missing-city",
+    });
 
     return;
   }
 
   const normalizedIntent =
     typeof intent === "string"
-      ? intent
-          .trim()
-          .toLowerCase()
+      ? intent.trim().toLowerCase()
       : "general";
 
   const categories =
-    INTENT_CATEGORIES[
-      normalizedIntent
-    ] ||
+    INTENT_CATEGORIES[normalizedIntent] ||
     INTENT_CATEGORIES.general;
 
   try {
     /*
-     * Resolvemos ciudad o barrio.
+     * 1. Resolver ubicación.
      */
     const locationInfo =
-      await geocodeLocation(
-        city.trim()
-      );
+      await geocodeLocation(city.trim());
 
     if (!locationInfo) {
-      res
-        .status(200)
-        .json({
-          city,
-          resolvedCity: null,
-          places: [],
-        });
+      res.status(200).json({
+        city,
+        resolvedCity: null,
+        places: [],
+      });
 
       return;
     }
 
     /*
-     * Buscamos suficientes resultados para poder filtrar
-     * los que no correspondan.
+     * 2. Buscar establecimientos.
      */
     const features =
       await searchPlaces({
         lat: locationInfo.lat,
         lon: locationInfo.lon,
         categories,
-        limit: 30,
+        limit: 50,
       });
 
     /*
-     * Filtro estricto por intención.
+     * 3. Filtrar según intención.
      */
     const filtered =
-      features.filter(
-        (feature) => {
-          const props =
-            feature.properties || {};
+      features.filter((feature) => {
+        const props =
+          feature.properties || {};
 
-          const featureCategories =
-            Array.isArray(
-              props.categories
-            )
-              ? props.categories
-              : [];
+        const featureCategories =
+          Array.isArray(props.categories)
+            ? props.categories
+            : [];
 
-          return matchesIntent(
-            featureCategories,
-            normalizedIntent
-          );
-        }
-      );
+        return matchesIntent(
+          featureCategories,
+          normalizedIntent
+        );
+      });
 
     /*
-     * Convertimos a nuestro formato.
+     * 4. Convertir al formato de SALIME.
      */
     const places =
       filtered
@@ -1157,51 +904,51 @@ export default async function handler(
         );
 
     /*
-     * Eliminamos duplicados.
+     * 5. Eliminar duplicados.
      */
-    const seen =
-      new Set();
+    const seen = new Set();
 
     const uniquePlaces =
-      places.filter(
-        (place) => {
-          const key =
-            `${place.name
-              .trim()
-              .toLowerCase()}|${
-              place.address || ""
-            }`;
+      places.filter((place) => {
+        const key =
+          `${place.name
+            .trim()
+            .toLowerCase()}|${
+            place.address || ""
+          }`;
 
-          if (seen.has(key)) {
-            return false;
-          }
-
-          seen.add(key);
-
-          return true;
+        if (seen.has(key)) {
+          return false;
         }
-      );
 
-    res
-      .status(200)
-      .json({
-        city,
-        resolvedCity:
-          locationInfo.label,
-        places:
-          uniquePlaces,
+        seen.add(key);
+
+        return true;
       });
+
+    /*
+     * 6. Ordenar por cercanía.
+     *
+     * Así no mostramos siempre una selección arbitraria
+     * de los primeros resultados.
+     */
+    uniquePlaces.sort(
+      (a, b) => a.dist - b.dist
+    );
+
+    res.status(200).json({
+      city,
+      resolvedCity: locationInfo.label,
+      places: uniquePlaces,
+    });
   } catch (err) {
     console.error(
       "Geoapify places error:",
       err
     );
 
-    res
-      .status(502)
-      .json({
-        error:
-          "geoapify-request-failed",
-      });
+    res.status(502).json({
+      error: "geoapify-request-failed",
+    });
   }
-  }
+    }
