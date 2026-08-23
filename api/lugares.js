@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------ */
-/* api/lugares.js  (VERSIÓN GEOAPIFY - REEMPLAZA LA VERSIÓN DE GEMINI) */
+/* api/lugares.js  (VERSIÓN GEOAPIFY - RECONSTRUIDA)                   */
 /*                                                                     */
 /* Busca lugares REALES usando Geoapify (Geocoding + Places API).      */
 /* Gemini queda fuera de esta parte: acá NO se inventa nada, todo      */
@@ -15,6 +15,11 @@
 /* ------------------------------------------------------------------ */
 
 const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
+
+// Centro por defecto: Córdoba Capital (se usa si no hay location o
+// si el geocoding no encuentra nada).
+const DEFAULT_CENTER = { lat: -31.4201, lon: -64.1888 };
+const DEFAULT_CITY_LABEL = "Córdoba";
 
 const INTENT_CATEGORIES = {
   comer: ["catering.restaurant", "catering.fast_food", "catering.food_court"],
@@ -41,6 +46,12 @@ const INTENT_CATEGORIES = {
     "leisure.park",
   ],
 };
+
+const VALID_INTENTS = Object.keys(INTENT_CATEGORIES);
+
+/* ------------------------------------------------------------------ */
+/* Helpers de estimación (ya existentes, sin tocar la lógica)          */
+/* ------------------------------------------------------------------ */
 
 function estimatePrice(categories) {
   const cats = categories || [];
@@ -83,4 +94,206 @@ function estimateSlots(categories) {
   return ["morning", "afternoon", "night"];
 }
 
-function emojiFor(catego
+/**
+ * Emoji representativo según las categorías de Geoapify del lugar.
+ * Se revisa en orden de especificidad para no quedarse siempre en
+ * el emoji "genérico".
+ */
+function emojiFor(categories) {
+  const cats = categories || [];
+
+  if (cats.some((c) => c.includes("fast_food"))) return "🍔";
+  if (cats.some((c) => c.includes("restaurant"))) return "🍽️";
+  if (cats.some((c) => c.includes("cafe"))) return "☕";
+  if (cats.some((c) => c.includes("nightclub"))) return "🎶";
+  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return "🍹";
+  if (cats.some((c) => c.includes("museum"))) return "🖼️";
+  if (cats.some((c) => c.includes("theatre"))) return "🎭";
+  if (cats.some((c) => c.includes("gallery") || c.includes("arts_centre"))) return "🎨";
+  if (cats.some((c) => c.includes("playground"))) return "🛝";
+  if (cats.some((c) => c.includes("activity_park"))) return "🎡";
+  if (cats.some((c) => c.includes("viewpoint"))) return "🌄";
+  if (cats.some((c) => c.includes("water"))) return "💧";
+  if (cats.some((c) => c.includes("park") || c.includes("natural"))) return "🌳";
+
+  return "📍";
+}
+
+/* ------------------------------------------------------------------ */
+/* Utilidades                                                          */
+/* ------------------------------------------------------------------ */
+
+function normalizeIntent(intent) {
+  return VALID_INTENTS.includes(intent) ? intent : "general";
+}
+
+/** Fisher-Yates simple, para no devolver siempre el mismo orden/top-N
+ *  cuando se repite la misma búsqueda (evita la sensación de
+ *  "recomendaciones repetidas" con parámetros idénticos). */
+function shuffle(arr) {
+  const copy = arr.slice();
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+async function geocodeLocation(locationText) {
+  if (!locationText) return null;
+
+  const url =
+    "https://api.geoapify.com/v1/geocode/search" +
+    `?text=${encodeURIComponent(locationText + ", Córdoba, Argentina")}` +
+    `&limit=1&apiKey=${GEOAPIFY_KEY}`;
+
+  const res = await fetch(url);
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  const feature = data.features?.[0];
+  if (!feature) return null;
+
+  const [lon, lat] = feature.geometry.coordinates;
+  const label =
+    feature.properties.formatted ||
+    feature.properties.city ||
+    locationText;
+
+  return { lat, lon, label };
+}
+
+async function searchPlaces({ lat, lon, categories, radius, limit }) {
+  const url =
+    "https://api.geoapify.com/v2/places" +
+    `?categories=${encodeURIComponent(categories.join(","))}` +
+    `&filter=circle:${lon},${lat},${radius}` +
+    `&bias=proximity:${lon},${lat}` +
+    `&limit=${limit}` +
+    `&apiKey=${GEOAPIFY_KEY}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Geoapify places error:", res.status, errText);
+    return [];
+  }
+
+  const data = await res.json();
+  return data.features || [];
+}
+
+/**
+ * Convierte un feature de Geoapify en el objeto de lugar que espera
+ * el frontend. Devuelve null si el feature no tiene nombre propio
+ * (para no mostrar calles/zonas/barrios como si fueran "el lugar").
+ */
+function mapFeatureToPlace(feature, intent) {
+  const props = feature.properties || {};
+  const categories = props.categories || [];
+
+  if (!props.name || !props.name.trim()) {
+    return null;
+  }
+
+  const distMeters =
+    typeof props.distance === "number" ? props.distance : null;
+
+  return {
+    name: props.name.trim(),
+    emoji: emojiFor(categories),
+    price: estimatePrice(categories),
+    rating: typeof props.rating === "number" ? props.rating : null,
+    dist:
+      distMeters !== null
+        ? distMeters >= 1000
+          ? `${(distMeters / 1000).toFixed(1)} km`
+          : `${Math.round(distMeters)} m`
+        : null,
+    mood: estimateMood(categories),
+    outdoor: estimateOutdoor(categories),
+    kidFriendly: estimateKidFriendly(categories),
+    nightOnly: estimateNightOnly(categories),
+    slots: estimateSlots(categories),
+    why: `Coincide con tu pedido de "${intent}"`,
+    address: props.formatted || props.address_line2 || null,
+    hours: props.opening_hours || null,
+    categories,
+    source: "geoapify",
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Handler                                                             */
+/* ------------------------------------------------------------------ */
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "método no permitido" });
+    return;
+  }
+
+  if (!GEOAPIFY_KEY) {
+    res.status(500).json({ error: "falta_clave_api" });
+    return;
+  }
+
+  const body = req.body || {};
+  const intent = normalizeIntent(body.intent);
+  const locationText =
+    typeof body.location === "string" && body.location.trim()
+      ? body.location.trim()
+      : null;
+  const close = !!body.close;
+  const limit = 20;
+  const radius = close ? 1500 : 6000;
+
+  try {
+    let center = DEFAULT_CENTER;
+    let resolvedCity = DEFAULT_CITY_LABEL;
+    const cityLabel = locationText || DEFAULT_CITY_LABEL;
+
+    if (locationText) {
+      const geocoded = await geocodeLocation(locationText);
+      if (geocoded) {
+        center = { lat: geocoded.lat, lon: geocoded.lon };
+        resolvedCity = geocoded.label;
+      }
+      // Si el geocoding falla, seguimos con DEFAULT_CENTER en vez de
+      // cortar la búsqueda: es preferible una lista vacía más adelante
+      // (si no hay resultados relevantes) que inventar una ubicación.
+    }
+
+    const categories = INTENT_CATEGORIES[intent];
+
+    const features = await searchPlaces({
+      lat: center.lat,
+      lon: center.lon,
+      categories,
+      radius,
+      limit,
+    });
+
+    const places = features
+      .map((f) => mapFeatureToPlace(f, intent))
+      .filter(Boolean);
+
+    const shuffled = shuffle(places).slice(0, 8);
+
+    res.status(200).json({
+      city: cityLabel,
+      resolvedCity,
+      places: shuffled,
+    });
+  } catch (err) {
+    console.error("Búsqueda de lugares fallida:", err);
+
+    // Preferimos una lista vacía antes que inventar o romper el
+    // frontend con una respuesta sin la forma esperada.
+    res.status(200).json({
+      city: locationText || DEFAULT_CITY_LABEL,
+      resolvedCity: DEFAULT_CITY_LABEL,
+      places: [],
+    });
+  }
+}
