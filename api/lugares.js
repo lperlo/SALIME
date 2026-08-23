@@ -197,19 +197,25 @@ function mapFeatureToPlace(feature, intent) {
   }
 
   const distMeters =
-    typeof props.distance === "number" ? props.distance : null;
+    typeof props.distance === "number" ? props.distance : 400;
+
+  // salime-app.jsx usa `dist` como NÚMERO de minutos caminando
+  // (lo interpola directo en "${dist} min caminando aprox." y lo
+  // resta para ordenar por cercanía en pick()). Convertimos metros
+  // a minutos a pie (~80 m/min) en vez de devolver un string.
+  const distMinutes = Math.max(1, Math.round(distMeters / 80));
 
   return {
     name: props.name.trim(),
     emoji: emojiFor(categories),
     price: estimatePrice(categories),
-    rating: typeof props.rating === "number" ? props.rating : null,
-    dist:
-      distMeters !== null
-        ? distMeters >= 1000
-          ? `${(distMeters / 1000).toFixed(1)} km`
-          : `${Math.round(distMeters)} m`
-        : null,
+    // Geoapify no trae rating. salime-app.jsx llama a
+    // rating.toFixed(1) sin chequear null -> con null esto rompe el
+    // render y deja la pantalla en blanco. Usamos el mismo valor fijo
+    // que ya usaba la versión anterior (según el comentario en pick()
+    // del propio jsx: "todos los lugares mapeados tienen rating 4.2").
+    rating: typeof props.rating === "number" ? props.rating : 4.2,
+    dist: distMinutes,
     mood: estimateMood(categories),
     outdoor: estimateOutdoor(categories),
     kidFriendly: estimateKidFriendly(categories),
@@ -217,10 +223,28 @@ function mapFeatureToPlace(feature, intent) {
     slots: estimateSlots(categories),
     why: `Coincide con tu pedido de "${intent}"`,
     address: props.formatted || props.address_line2 || null,
-    hours: props.opening_hours || null,
+    hours: parseSimpleHours(props.opening_hours),
     categories,
     source: "geoapify",
   };
+}
+
+/**
+ * isOpenAt() en salime-app.jsx espera place.hours como
+ * [ "HH:MM", "HH:MM" ]. Geoapify devuelve opening_hours como texto
+ * estilo OSM (ej. "Mo-Fr 09:00-18:00"), que NO es indexable como
+ * array de horas. Solo devolvemos un rango simple cuando el texto
+ * trae un único patrón HH:MM-HH:MM claro; si no, null (isOpenAt ya
+ * trata null como "se asume abierto", igual que un lugar sin
+ * horario en DEMO_HOURS).
+ */
+function parseSimpleHours(raw) {
+  if (typeof raw !== "string") return null;
+
+  const match = raw.match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/);
+  if (!match) return null;
+
+  return [match[1], match[2]];
 }
 
 /* ------------------------------------------------------------------ */
@@ -240,10 +264,14 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
   const intent = normalizeIntent(body.intent);
-  const locationText =
-    typeof body.location === "string" && body.location.trim()
-      ? body.location.trim()
-      : null;
+  // salime-app.jsx (fetchRealPool) manda el campo como "city", no
+  // "location". Aceptamos ambos por las dudas, pero "city" es el que
+  // realmente llega hoy.
+  const rawLocation =
+    (typeof body.city === "string" && body.city.trim()) ||
+    (typeof body.location === "string" && body.location.trim()) ||
+    "";
+  const locationText = rawLocation || null;
   const close = !!body.close;
   const limit = 20;
   const radius = close ? 1500 : 6000;
