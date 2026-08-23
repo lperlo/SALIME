@@ -367,7 +367,15 @@ function mapFeatureToVenue(feature, center) {
     name: String(name).trim(),
     emoji: emojiFor(categories),
     price: estimatePrice(categories),
-    rating: 4.2,
+    /*
+     * NOTA: antes acá había un "rating: 4.2" fijo para todos los
+     * lugares. Como Geoapify no siempre informa un rating real, ese
+     * número era inventado (y por eso aparecía repetido en todas las
+     * tarjetas). SALIME no debe mostrar datos que no sean reales, así
+     * que directamente no incluimos rating. Si en el futuro Geoapify
+     * confirma un campo de rating real disponible en la respuesta,
+     * se puede mapear acá.
+     */
     dist: distMin,
     mood: estimateMood(categories),
     outdoor: estimateOutdoor(categories),
