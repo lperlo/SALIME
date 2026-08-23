@@ -739,10 +739,24 @@ function mapFeatureToVenue(feature, locationInfo) {
   );
 
   return {
+    /*
+     * FIX (nombres de calle mostrados como si fueran negocios,
+     * ej. "Buenos Aires" en Nueva Córdoba):
+     *
+     * Antes usábamos props.address_line1 como respaldo cuando
+     * Geoapify no traía un props.name. address_line1 suele ser
+     * el nombre de la CALLE, no del establecimiento, así que un
+     * POI mal cargado en OpenStreetMap (categorizado como
+     * catering.* pero sin nombre propio) terminaba mostrándose
+     * con el nombre de la calle como si fuera un restaurante real.
+     *
+     * Ahora, si no hay props.name, dejamos name en null. Más abajo,
+     * en el handler, estos lugares sin nombre real se descartan
+     * (places.filter(place => place.name && place.name.trim())),
+     * en vez de mostrarse con un nombre falso.
+     */
     name:
-      props.name ||
-      props.address_line1 ||
-      null,
+      props.name || null,
 
     emoji:
       emojiFor(categories),
@@ -951,4 +965,4 @@ export default async function handler(req, res) {
       error: "geoapify-request-failed",
     });
   }
-    }
+}
