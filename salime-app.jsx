@@ -279,19 +279,19 @@ const STEPS_DAY = [
   {
     key: "cena",
     label: "PARA ARRANCAR",
-    time: "17:00",
+    time: "12:30",
     pool: CENA,
   },
   {
     key: "bebida",
     label: "SEGUIR",
-    time: "18:30",
+    time: "14:00",
     pool: BEBIDA,
   },
   {
     key: "final",
     label: "PARA TERMINAR",
-    time: "20:00",
+    time: "15:30",
     pool: FINAL,
   },
 ];
@@ -435,6 +435,16 @@ const STEPS_AIRE_LIBRE = [
   },
 ];
 
+/*
+ * FIX (Güemes / "quiero comer en X"):
+ * El tercer paso usaba pool: PASEO, cuyo intent en POOL_KEYS es
+ * "paseo" (leisure.park / tourism.sights en api/lugares.js). Por eso
+ * un plan de "comer" terminaba pidiéndole a /api/lugares una plaza o
+ * un paseo para el último paso, y ese lugar (no gastronómico)
+ * terminaba mostrándose en pantalla. Ahora el cierre también pide
+ * intent "comer" (pool: FINAL), así los tres pasos son siempre
+ * lugares para comer.
+ */
 const STEPS_COMER = [
   {
     key: "comer",
@@ -449,10 +459,10 @@ const STEPS_COMER = [
     pool: FINAL,
   },
   {
-    key: "paseo",
+    key: "cierre",
     label: "PARA TERMINAR",
     time: "23:00",
-    pool: PASEO,
+    pool: FINAL,
   },
 ];
 
@@ -1045,6 +1055,17 @@ function getSteps({
     /*
      * Si pide comer a la mañana/tarde, mantenemos horarios
      * coherentes en vez de obligarlo a cenar.
+     *
+     * FIX (plazas/plazoletas apareciendo en planes de "comer" con
+     * franja mañana/tarde, ej. "Plazoleta Comandante Coronel Anibal
+     * Montes", "Plaza Sarmiento"):
+     *
+     * Estas dos variantes usaban pool: MERIENDA_FAMILIA (intent
+     * "familia": parques, museos, restaurantes mezclados) y
+     * pool: PASEO (intent "paseo": parques, sitios turísticos) para
+     * el 2do y 3er paso. Un plan de "comer" terminaba pidiéndole a
+     * /api/lugares categorías que no son de comida. Ahora los tres
+     * pasos usan pools que mapean a intent "comer" (CENA/FINAL).
      */
     if (timeBucket === "morning") {
       return [
@@ -1058,13 +1079,13 @@ function getSteps({
           key: "cafe",
           label: "SEGUIR",
           time: "12:00",
-          pool: MERIENDA_FAMILIA,
+          pool: FINAL,
         },
         {
-          key: "paseo",
+          key: "cierre",
           label: "PARA TERMINAR",
           time: "13:30",
-          pool: PASEO,
+          pool: FINAL,
         },
       ];
     }
@@ -1083,13 +1104,13 @@ function getSteps({
           key: "postre",
           label: "SEGUIR",
           time: "18:30",
-          pool: MERIENDA_FAMILIA,
+          pool: FINAL,
         },
         {
-          key: "paseo",
+          key: "cierre",
           label: "PARA TERMINAR",
           time: "20:00",
-          pool: PASEO,
+          pool: FINAL,
         },
       ];
     }
