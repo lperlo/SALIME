@@ -1,55 +1,33 @@
 /* ------------------------------------------------------------------ */
-/* api/lugares.js                                                     */
-/*                                                                    */
-/* Busca lugares REALES usando Gemini (IA) en vez de Geoapify.        */
-/*                                                                    */
-/* Reglas de la versión final:                                        */
-/* - La API key vive únicamente en Vercel: GEMINI_API_KEY              */
-/* - Nunca inventa lugares: se le pide explícitamente a Gemini que     */
-/*   solo devuelva lugares reales, y que devuelva menos si no está     */
-/*   seguro, en vez de inventar.                                       */
-/* - Si no encuentra resultados devuelve places: [].                   */
-/* - No depende de api/interpretar.js.                                 */
+/* api/lugares.js  (VERSIÓN GEOAPIFY - REEMPLAZA LA VERSIÓN DE GEMINI) */
+/*                                                                     */
+/* Busca lugares REALES usando Geoapify (Geocoding + Places API).      */
+/* Gemini queda fuera de esta parte: acá NO se inventa nada, todo      */
+/* sale directamente de Geoapify.                                      */
+/*                                                                     */
+/* Variables de entorno necesarias en Vercel:                          */
+/*   GEOAPIFY_API_KEY                                                  */
+/*                                                                     */
+/* Mantiene la MISMA forma de respuesta que la versión anterior:       */
+/*   { city, resolvedCity, places: [ {name, emoji, price, rating,      */
+/*     dist, mood, outdoor, kidFriendly, nightOnly, slots, why,        */
+/*     address, hours, categories, source} ] }                         */
 /* ------------------------------------------------------------------ */
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-
-// Si este modelo no está habilitado para tu key, se puede cambiar acá
-// sin tocar el resto del archivo.
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEOAPIFY_KEY = process.env.GEOAPIFY_API_KEY;
 
 const INTENT_CATEGORIES = {
-  comer: [
-    "catering.restaurant",
-    "catering.fast_food",
-    "catering.food_court",
-  ],
-  beber: [
-    "catering.cafe",
-    "catering.bar",
-    "catering.pub",
-  ],
+  comer: ["catering.restaurant", "catering.fast_food", "catering.food_court"],
+  beber: ["catering.cafe", "catering.bar", "catering.pub"],
   cultura: [
     "entertainment.museum",
     "entertainment.culture.gallery",
     "entertainment.culture.theatre",
     "entertainment.culture.arts_centre",
   ],
-  paseo: [
-    "leisure.park",
-    "tourism.attraction.viewpoint",
-    "natural",
-  ],
-  aire_libre: [
-    "leisure.park",
-    "natural",
-    "natural.water",
-  ],
-  fiesta: [
-    "entertainment.nightclub",
-    "catering.bar",
-    "catering.pub",
-  ],
+  paseo: ["leisure.park", "tourism.attraction.viewpoint", "natural"],
+  aire_libre: ["leisure.park", "natural", "natural.water"],
+  fiesta: ["entertainment.nightclub", "catering.bar", "catering.pub"],
   familia: [
     "leisure.playground",
     "entertainment.activity_park",
@@ -66,7 +44,6 @@ const INTENT_CATEGORIES = {
 
 function estimatePrice(categories) {
   const cats = categories || [];
-
   if (cats.some((c) => c.includes("fast_food"))) return 1;
   if (cats.some((c) => c.includes("cafe"))) return 1;
   if (cats.some((c) => c.includes("playground") || c.includes("park") || c.includes("natural"))) return 1;
@@ -74,50 +51,23 @@ function estimatePrice(categories) {
   if (cats.some((c) => c.includes("museum") || c.includes("culture"))) return 2;
   if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return 2;
   if (cats.some((c) => c.includes("restaurant"))) return 2;
-
   return 2;
 }
 
 function estimateMood(categories) {
   const cats = categories || [];
-
-  if (cats.some((c) => c.includes("nightclub") || c.includes("bar") || c.includes("pub"))) {
-    return ["animado"];
-  }
-
-  if (
-    cats.some(
-      (c) =>
-        c.includes("cafe") ||
-        c.includes("museum") ||
-        c.includes("culture") ||
-        c.includes("park") ||
-        c.includes("natural") ||
-        c.includes("playground")
-    )
-  ) {
-    return ["tranquilo"];
-  }
-
+  if (cats.some((c) => c.includes("nightclub") || c.includes("bar") || c.includes("pub"))) return ["animado"];
   return ["tranquilo"];
 }
 
 function estimateOutdoor(categories) {
   const cats = categories || [];
-  return cats.some(
-    (c) =>
-      c.includes("park") ||
-      c.includes("natural") ||
-      c.includes("water") ||
-      c.includes("viewpoint")
-  );
+  return cats.some((c) => c.includes("park") || c.includes("natural") || c.includes("water") || c.includes("viewpoint"));
 }
 
 function estimateKidFriendly(categories) {
   const cats = categories || [];
-  if (cats.some((c) => c.includes("bar") || c.includes("pub") || c.includes("nightclub"))) {
-    return false;
-  }
+  if (cats.some((c) => c.includes("bar") || c.includes("pub") || c.includes("nightclub"))) return false;
   return true;
 }
 
@@ -128,12 +78,8 @@ function estimateNightOnly(categories) {
 
 function estimateSlots(categories) {
   const cats = categories || [];
-
   if (cats.some((c) => c.includes("nightclub"))) return ["night"];
-  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) {
-    return ["afternoon", "night"];
-  }
-
+  if (cats.some((c) => c.includes("bar") || c.includes("pub"))) return ["afternoon", "night"];
   return ["morning", "afternoon", "night"];
 }
 
@@ -152,123 +98,77 @@ function emojiFor(categories) {
   return "📍";
 }
 
-/* ------------------------------------------------------------------ */
-/* Gemini: pedirle lugares reales                                     */
-/* ------------------------------------------------------------------ */
-
-function buildPrompt({ city, intent, allowedCategories }) {
-  return `Sos un asistente que conoce lugares reales y actualmente existentes en Argentina.
-
-Ciudad/zona pedida por el usuario: "${city}"
-Intención del usuario: "${intent}"
-
-Categorías permitidas (elegí UNA por lugar, tal cual está escrita):
-${allowedCategories.map((c) => `- ${c}`).join("\n")}
-
-Reglas obligatorias:
-1. Devolvé SOLO lugares reales que existan HOY, con local físico abierto al
-   público, en esa ciudad o zona. Si tenés cualquier duda de que un lugar siga
-   existiendo o de que sea real, NO lo incluyas.
-2. Excluí explícitamente: locales que sean solo delivery/take away sin salón
-   ni mesas, dark kitchens/cocinas fantasma, virtual restaurants, y cualquier
-   lugar al que una persona no pueda ir físicamente a sentarse o visitar.
-3. Es preferible devolver pocos lugares (incluso 2 o 3, o ninguno) a incluir
-   uno del que no estés seguro.
-4. No repitas siempre los mismos lugares típicos: variá la selección dentro de
-   la zona pedida.
-5. Todos los lugares deben estar dentro de "${city}" o su zona inmediata, no en
-   otra parte de la ciudad.
-6. Para la dirección: solo escribí calle y altura si estás realmente seguro de
-   que es correcta. Si no estás seguro de la dirección exacta, escribí
-   únicamente el barrio/zona conocida (por ejemplo "Nueva Córdoba") en vez de
-   inventar una calle y altura. Nunca inventes un número de puerta.
-7. Respondé ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown,
-   con esta forma exacta:
-
-{
-  "resolvedCity": "nombre de la ciudad/zona interpretada",
-  "places": [
-    { "name": "...", "address": "calle y altura solo si estás seguro, o el barrio/zona si no", "category": "una de las categorías permitidas" }
-  ]
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
-Devolvé entre 4 y 8 lugares si podés garantizar que son reales. Si solo podés
-garantizar 2 o 3, devolvé esos.`;
-}
+/* ------------------------------------------------------------------ */
+/* Geoapify: geocodificar la ciudad/zona pedida                       */
+/* ------------------------------------------------------------------ */
 
-async function askGeminiForPlaces({ city, intent }) {
-  const allowedCategories = INTENT_CATEGORIES[intent] || INTENT_CATEGORIES.general;
-  const prompt = buildPrompt({ city, intent, allowedCategories });
-
+async function geocodeCity(city) {
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent` +
-    `?key=${GEMINI_KEY}`;
+    `https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(city)}` +
+    `&limit=1&apiKey=${GEOAPIFY_KEY}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.15,
-        responseMimeType: "application/json",
-      },
-    }),
-  });
-
-  if (!res.ok) throw new Error("gemini-request-error");
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("geoapify-geocode-error");
 
   const data = await res.json();
-  const rawText =
-    data &&
-    data.candidates &&
-    data.candidates[0] &&
-    data.candidates[0].content &&
-    data.candidates[0].content.parts &&
-    data.candidates[0].content.parts[0] &&
-    data.candidates[0].content.parts[0].text;
+  const feature = data && data.features && data.features[0];
+  if (!feature) return null;
 
-  if (!rawText) return { resolvedCity: null, places: [] };
-
-  const cleaned = String(rawText)
-    .trim()
-    .replace(/^```json/i, "")
-    .replace(/^```/, "")
-    .replace(/```$/, "")
-    .trim();
-
-  let parsed;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch (err) {
-    return { resolvedCity: null, places: [] };
-  }
-
-  const places = Array.isArray(parsed.places) ? parsed.places : [];
+  const [lon, lat] = feature.geometry.coordinates;
   const resolvedCity =
-    typeof parsed.resolvedCity === "string" ? parsed.resolvedCity : null;
+    (feature.properties && (feature.properties.city || feature.properties.formatted)) || city;
 
-  return { resolvedCity, places };
+  return { lat, lon, resolvedCity };
 }
 
-function mapGeminiPlaceToVenue(raw, allowedCategories) {
-  const name = raw && raw.name ? String(raw.name).trim() : "";
+/* ------------------------------------------------------------------ */
+/* Geoapify: buscar lugares reales por categoría                      */
+/* ------------------------------------------------------------------ */
+
+async function fetchPlaces({ lat, lon, categories, radius }) {
+  const catString = categories.join(",");
+  const url =
+    `https://api.geoapify.com/v2/places?categories=${encodeURIComponent(catString)}` +
+    `&filter=circle:${lon},${lat},${radius}` +
+    `&bias=proximity:${lon},${lat}` +
+    `&limit=20&apiKey=${GEOAPIFY_KEY}`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("geoapify-places-error");
+
+  const data = await res.json();
+  return Array.isArray(data.features) ? data.features : [];
+}
+
+function mapFeatureToVenue(feature) {
+  const props = feature.properties || {};
+  const name = props.name ? String(props.name).trim() : null;
+
+  // Sin nombre real no lo mostramos: evita que aparezcan plazas/calles
+  // genéricas sin identidad de comercio.
   if (!name) return null;
 
-  const rawCategory = raw && raw.category ? String(raw.category).trim() : "";
-  const category = allowedCategories.includes(rawCategory)
-    ? rawCategory
-    : allowedCategories[0];
-  const categories = [category];
+  const categories = Array.isArray(props.categories) ? props.categories : [];
 
-  const address = raw && raw.address ? String(raw.address).trim() : null;
+  const address =
+    props.address_line2 || props.formatted || props.address_line1 || null;
 
   return {
+    id: props.place_id || `${name}|${address || ""}`,
     name,
     emoji: emojiFor(categories),
     price: estimatePrice(categories),
     rating: 4.2,
-    dist: 10,
+    dist: typeof props.distance === "number" ? Math.round(props.distance) : null,
     mood: estimateMood(categories),
     outdoor: estimateOutdoor(categories),
     kidFriendly: estimateKidFriendly(categories),
@@ -276,11 +176,15 @@ function mapGeminiPlaceToVenue(raw, allowedCategories) {
     slots: estimateSlots(categories),
     why: null,
     address,
-    hours: null,
+    hours: (props.opening_hours) || null,
     categories,
-    source: "gemini",
+    source: "geoapify",
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Handler                                                            */
+/* ------------------------------------------------------------------ */
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -288,43 +192,61 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (!GEMINI_KEY) {
-    res.status(500).json({ error: "missing-gemini-key" });
+  if (!GEOAPIFY_KEY) {
+    res.status(500).json({ error: "missing-geoapify-key" });
     return;
   }
 
-  const { city, intent } = req.body || {};
+  const { city, intent, exclude, radius } = req.body || {};
 
   if (!city || typeof city !== "string" || !city.trim()) {
     res.status(400).json({ error: "missing-city" });
     return;
   }
 
-  const allowedCategories = INTENT_CATEGORIES[intent] || INTENT_CATEGORIES.general;
+  const categories = INTENT_CATEGORIES[intent] || INTENT_CATEGORIES.general;
+  const searchRadius = typeof radius === "number" ? radius : 6000; // metros
+  const excludeIds = new Set(Array.isArray(exclude) ? exclude : []);
 
   try {
-    const { resolvedCity, places: rawPlaces } = await askGeminiForPlaces({
-      city: city.trim(),
-      intent,
+    const geo = await geocodeCity(city.trim());
+
+    if (!geo) {
+      res.status(200).json({ city, resolvedCity: city, places: [] });
+      return;
+    }
+
+    const features = await fetchPlaces({
+      lat: geo.lat,
+      lon: geo.lon,
+      categories,
+      radius: searchRadius,
     });
 
     const seen = new Set();
-    const places = rawPlaces
-      .map((raw) => mapGeminiPlaceToVenue(raw, allowedCategories))
+    let places = features
+      .map(mapFeatureToVenue)
       .filter(Boolean)
       .filter((place) => {
-        const key = `${place.name}|${place.address || ""}`.toLowerCase();
+        const key = place.id.toLowerCase();
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
-      });
+      })
+      // "Cambiar todo" manda los ids ya mostrados en `exclude` para que
+      // no se repitan los mismos lugares.
+      .filter((place) => !excludeIds.has(place.id));
+
+    // Variedad real: se desordena el conjunto completo devuelto por
+    // Geoapify (no siempre los primeros 6-8) antes de recortar.
+    places = shuffle(places).slice(0, 8);
 
     res.status(200).json({
       city,
-      resolvedCity: resolvedCity || city,
+      resolvedCity: geo.resolvedCity,
       places,
     });
   } catch (err) {
-    res.status(502).json({ error: "gemini-request-failed" });
+    res.status(502).json({ error: "geoapify-request-failed" });
   }
-}
+    }
