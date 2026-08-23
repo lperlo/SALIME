@@ -55,88 +55,15 @@ const INTENT_CATEGORIES = {
     "catering.cafe",
     "catering.bar",
   ],
-
-  CENA: [
-    "catering.restaurant",
-    "catering.fast_food",
-    "catering.food_court",
-    "catering.cafe",
-    "catering.bar",
-  ],
-
-  BEBIDA: [
-    "catering.bar",
-    "catering.pub",
-    "catering.cafe",
-  ],
-
-  FINAL: [
-    "catering.restaurant",
-    "catering.fast_food",
-    "catering.cafe",
-    "catering.bar",
-  ],
-
-  CULTURA: [
-    "entertainment.museum",
-    "entertainment.culture.gallery",
-    "entertainment.culture.theatre",
-    "entertainment.culture.arts_centre",
-  ],
-
-  PASEO: [
-    "leisure.park",
-    "tourism.attraction.viewpoint",
-  ],
-
-  AIRE_LIBRE: [
-    "leisure.park",
-    "natural",
-    "natural.water",
-  ],
-
-  FIESTA: [
-    "entertainment.nightclub",
-    "catering.bar",
-    "catering.pub",
-  ],
-
-  ACTIVIDAD_FAMILIA: [
-    "leisure.playground",
-    "entertainment.activity_park",
-    "entertainment.museum",
-  ],
-
-  MERIENDA_FAMILIA: [
-    "catering.cafe",
-    "catering.restaurant",
-  ],
-
-  CIERRE_FAMILIA: [
-    "catering.restaurant",
-    "catering.fast_food",
-    "catering.cafe",
-    "catering.bar",
-  ],
 };
-
-function normalizeText(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[.,;:()]/g, " ")
-    .replace(/\s+/g, " ");
-}
 
 /*
  * Coordenadas aproximadas de barrios conocidos
  * de Córdoba.
  *
  * IMPORTANTE:
- * Estas coordenadas son solamente el CENTRO DE BÚSQUEDA.
- * No son un lugar recomendado.
+ * Son solamente el CENTRO DE BÚSQUEDA.
+ * Nunca se devuelven como lugares recomendados.
  */
 const KNOWN_LOCATIONS = {
   guemes: {
@@ -153,13 +80,13 @@ const KNOWN_LOCATIONS = {
 
   "alta cordoba": {
     lat: -31.39854,
-    lon: -64.18070,
+    lon: -64.1807,
     label: "Alta Córdoba, Córdoba, Argentina",
   },
 
   "general paz": {
     lat: -31.40955,
-    lon: -64.17150,
+    lon: -64.1715,
     label: "General Paz, Córdoba, Argentina",
   },
 
@@ -170,9 +97,22 @@ const KNOWN_LOCATIONS = {
   },
 };
 
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[.,;:()]/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 function getKnownLocation(text) {
   const normalized = normalizeText(text)
-    .replace(/\b(barrio|zona|sector|cordoba|argentina)\b/g, " ")
+    .replace(
+      /\b(barrio|zona|sector|cordoba|argentina)\b/g,
+      " "
+    )
     .replace(/\s+/g, " ")
     .trim();
 
@@ -180,10 +120,6 @@ function getKnownLocation(text) {
     return KNOWN_LOCATIONS[normalized];
   }
 
-  /*
-   * También detectamos el barrio aunque venga
-   * acompañado de otras palabras.
-   */
   for (const key of Object.keys(KNOWN_LOCATIONS)) {
     if (
       normalized === key ||
@@ -204,10 +140,7 @@ async function geocodeLocation(text) {
   }
 
   /*
-   * PRIMERO buscamos barrios conocidos.
-   * Así "Güemes", "barrio Güemes",
-   * "Güemes, Córdoba", etc. terminan
-   * en el mismo punto de búsqueda.
+   * Primero usamos barrios conocidos.
    */
   const known = getKnownLocation(query);
 
@@ -216,7 +149,8 @@ async function geocodeLocation(text) {
   }
 
   /*
-   * Para ubicaciones desconocidas usamos Geoapify.
+   * Si no es un barrio conocido,
+   * usamos Geoapify para ubicarlo.
    */
   const url =
     "https://api.geoapify.com/v1/geocode/search" +
@@ -249,16 +183,18 @@ async function geocodeLocation(text) {
 
   const wanted = normalizeText(query);
 
-  const scored = results.map((r) => {
-    const name = normalizeText(r.name);
-    const city = normalizeText(r.city);
-    const suburb = normalizeText(r.suburb);
+  const scored = results.map((result) => {
+    const name = normalizeText(result.name);
+    const city = normalizeText(result.city);
+    const suburb = normalizeText(result.suburb);
     const neighbourhood = normalizeText(
-      r.neighbourhood
+      result.neighbourhood
     );
-    const district = normalizeText(r.district);
+    const district = normalizeText(
+      result.district
+    );
     const formatted = normalizeText(
-      r.formatted
+      result.formatted
     );
 
     let score = 0;
@@ -289,14 +225,14 @@ async function geocodeLocation(text) {
     }
 
     if (
-      typeof r.lat !== "number" ||
-      typeof r.lon !== "number"
+      typeof result.lat !== "number" ||
+      typeof result.lon !== "number"
     ) {
       score -= 1000;
     }
 
     return {
-      result: r,
+      result,
       score,
     };
   });
@@ -337,8 +273,8 @@ async function searchPlaces({
   );
 
   /*
-   * Ampliamos la cantidad de resultados para
-   * que el filtro posterior tenga opciones.
+   * Pedimos muchos resultados para poder
+   * filtrarlos después.
    */
   params.set("limit", "200");
 
@@ -424,6 +360,10 @@ function parseSimpleHours(raw) {
   ];
 }
 
+/*
+ * Comprueba que el lugar realmente pertenece
+ * a alguna de las categorías solicitadas.
+ */
 function matchesIntent(
   feature,
   allowedCategories
@@ -446,13 +386,31 @@ function matchesIntent(
   );
 }
 
-function isBadPlace(feature) {
+/*
+ * Determina si un resultado NO es un lugar
+ * válido para mostrar.
+ *
+ * IMPORTANTE:
+ * Antes esta función exigía catering para TODOS
+ * los resultados. Eso hacía que parques, museos,
+ * teatros, miradores, etc. fueran eliminados.
+ *
+ * Ahora solamente exigimos catering cuando
+ * la categoría solicitada es gastronómica.
+ */
+function isBadPlace(
+  feature,
+  allowedCategories
+) {
   const props =
     feature?.properties || {};
 
   const name =
     String(props.name || "").trim();
 
+  /*
+   * Sin nombre no mostramos el resultado.
+   */
   if (!name) {
     return true;
   }
@@ -462,24 +420,13 @@ function isBadPlace(feature) {
       ? props.categories
       : [];
 
-  /*
-   * Para "comer" exigimos que realmente
-   * tenga una categoría de catering.
-   */
-  const isCatering =
-    categories.some((c) =>
-      String(c).startsWith(
-        "catering."
-      )
-    );
-
-  if (!isCatering) {
+  if (!categories.length) {
     return true;
   }
 
   /*
-   * Excluimos explícitamente lugares que
-   * no deberían aparecer como restaurantes.
+   * Evitamos máquinas expendedoras y kioscos
+   * cuando aparecen como resultados gastronómicos.
    */
   const forbidden = [
     "catering.kiosk",
@@ -487,23 +434,68 @@ function isBadPlace(feature) {
   ];
 
   if (
-    categories.some((c) =>
-      forbidden.includes(String(c))
+    categories.some((category) =>
+      forbidden.includes(String(category))
     )
   ) {
     return true;
   }
 
   /*
-   * Evitamos resultados sin ningún dato
-   * útil de ubicación.
+   * Si estamos buscando comida/bebida/fiesta,
+   * debe existir una categoría catering.
+   */
+  const needsCatering =
+    allowedCategories.some(
+      (category) =>
+        category.startsWith("catering.")
+    );
+
+  if (needsCatering) {
+    const isCatering =
+      categories.some((category) =>
+        String(category).startsWith(
+          "catering."
+        )
+      );
+
+    /*
+     * Para intenciones exclusivamente gastronómicas,
+     * descartamos lo que no sea catering.
+     *
+     * En "familia" y "fiesta" también permitimos
+     * categorías no gastronómicas si coinciden
+     * con la intención.
+     */
+    const hasNonCateringMatch =
+      categories.some((actual) =>
+        allowedCategories.some(
+          (allowed) =>
+            actual === allowed ||
+            actual.startsWith(
+              `${allowed}.`
+            )
+        )
+      );
+
+    if (
+      !isCatering &&
+      !hasNonCateringMatch
+    ) {
+      return true;
+    }
+  }
+
+  /*
+   * Debe existir alguna información de ubicación.
    */
   const hasAddress =
     props.street ||
     props.formatted ||
     props.city ||
     props.suburb ||
-    props.neighbourhood;
+    props.neighbourhood ||
+    props.district;
 
   if (!hasAddress) {
     return true;
@@ -514,24 +506,24 @@ function isBadPlace(feature) {
 
 function emojiFor(categories) {
   if (
-    categories.some((c) =>
-      c.includes("fast_food")
+    categories.some((category) =>
+      category.includes("fast_food")
     )
   ) {
     return "🍔";
   }
 
   if (
-    categories.some((c) =>
-      c.includes("restaurant")
+    categories.some((category) =>
+      category.includes("restaurant")
     )
   ) {
     return "🍽️";
   }
 
   if (
-    categories.some((c) =>
-      c.includes("cafe")
+    categories.some((category) =>
+      category.includes("cafe")
     )
   ) {
     return "☕";
@@ -539,12 +531,60 @@ function emojiFor(categories) {
 
   if (
     categories.some(
-      (c) =>
-        c.includes("bar") ||
-        c.includes("pub")
+      (category) =>
+        category.includes("bar") ||
+        category.includes("pub")
     )
   ) {
     return "🍺";
+  }
+
+  if (
+    categories.some((category) =>
+      category.includes("museum")
+    )
+  ) {
+    return "🏛️";
+  }
+
+  if (
+    categories.some((category) =>
+      category.includes("gallery")
+    )
+  ) {
+    return "🎨";
+  }
+
+  if (
+    categories.some((category) =>
+      category.includes("theatre")
+    )
+  ) {
+    return "🎭";
+  }
+
+  if (
+    categories.some((category) =>
+      category.includes("park")
+    )
+  ) {
+    return "🌳";
+  }
+
+  if (
+    categories.some((category) =>
+      category.includes("viewpoint")
+    )
+  ) {
+    return "🌄";
+  }
+
+  if (
+    categories.some((category) =>
+      category.includes("playground")
+    )
+  ) {
+    return "🛝";
   }
 
   return "📍";
@@ -631,12 +671,37 @@ function mapFeature(
         street ||
         null;
 
+  const isNightclub =
+    categories.some((category) =>
+      category.includes("nightclub")
+    );
+
+  const isBar =
+    categories.some(
+      (category) =>
+        category.includes("bar") ||
+        category.includes("pub")
+    );
+
+  const isOutdoor =
+    categories.some(
+      (category) =>
+        category.includes("park") ||
+        category.includes("viewpoint") ||
+        category.includes("natural")
+    );
+
   return {
     name,
 
     emoji:
       emojiFor(categories),
 
+    /*
+     * No inventamos precios.
+     * Se mantiene 2 para no romper
+     * el formato que espera el frontend.
+     */
     price: 2,
 
     /*
@@ -647,33 +712,22 @@ function mapFeature(
     dist: distanceMinutes,
 
     mood:
-      categories.some(
-        (c) =>
-          c.includes("bar") ||
-          c.includes("pub")
-      )
+      isBar
         ? ["animado"]
+        : isOutdoor
+        ? ["tranquilo"]
         : ["tranquilo"],
 
-    outdoor: false,
+    outdoor: isOutdoor,
 
     kidFriendly:
-      !categories.some(
-        (c) =>
-          c.includes("nightclub")
-      ),
+      !isNightclub,
 
     nightOnly:
-      categories.some(
-        (c) =>
-          c.includes("nightclub")
-      ),
+      isNightclub,
 
     slots:
-      categories.some(
-        (c) =>
-          c.includes("nightclub")
-      )
+      isNightclub
         ? ["night"]
         : [
             "morning",
@@ -681,6 +735,10 @@ function mapFeature(
             "night",
           ],
 
+    /*
+     * La explicación de por qué se recomienda
+     * la agregaremos después con la IA.
+     */
     why: null,
 
     address,
@@ -693,6 +751,13 @@ function mapFeature(
     categories,
 
     source: "geoapify",
+
+    /*
+     * Coordenadas reales del lugar.
+     */
+    lat,
+
+    lon,
   };
 }
 
@@ -741,6 +806,10 @@ export default async function handler(
       .trim()
       .toLowerCase();
 
+  /*
+   * Convertimos las variantes que puede mandar
+   * el frontend a una intención única.
+   */
   const aliases = {
     cena: "comer",
     bebida: "beber",
@@ -767,6 +836,9 @@ export default async function handler(
     INTENT_CATEGORIES.general;
 
   try {
+    /*
+     * 1. Ubicamos la zona solicitada.
+     */
     const location =
       await geocodeLocation(
         city.trim()
@@ -782,6 +854,9 @@ export default async function handler(
         });
     }
 
+    /*
+     * 2. Buscamos lugares REALES en Geoapify.
+     */
     const features =
       await searchPlaces({
         lat: location.lat,
@@ -789,6 +864,10 @@ export default async function handler(
         categories,
       });
 
+    /*
+     * 3. Filtramos solamente resultados
+     * que realmente coincidan con la intención.
+     */
     const seen =
       new Set();
 
@@ -802,7 +881,10 @@ export default async function handler(
         )
         .filter(
           (feature) =>
-            !isBadPlace(feature)
+            !isBadPlace(
+              feature,
+              categories
+            )
         )
         .map((feature) =>
           mapFeature(
@@ -811,10 +893,18 @@ export default async function handler(
           )
         )
         .filter(Boolean)
+
+        /*
+         * Primero los más cercanos.
+         */
         .sort(
           (a, b) =>
             a.dist - b.dist
         )
+
+        /*
+         * Eliminamos duplicados.
+         */
         .filter((place) => {
           const key =
             normalizeText(
@@ -833,6 +923,10 @@ export default async function handler(
 
           return true;
         })
+
+        /*
+         * Máximo 30 lugares reales.
+         */
         .slice(0, 30);
 
     console.log(
@@ -874,4 +968,4 @@ export default async function handler(
         places: [],
       });
   }
-      }
+    }
