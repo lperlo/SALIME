@@ -1014,7 +1014,7 @@ function getTimeBucket({
 
   if (morning) return "morning";
   if (afternoon) return "afternoon";
-  if (daytimeGeneric) return "afternoon";
+  if (daytimeGeneric) return "day";
   if (night) return "night";
 
   return "night";
@@ -1085,6 +1085,39 @@ function getSteps({
           key: "cierre",
           label: "PARA TERMINAR",
           time: "13:30",
+          pool: FINAL,
+        },
+      ];
+    }
+
+    /*
+     * FIX (bug "de día" → 17:00 en planes de comer):
+     * Antes, getTimeBucket() mapeaba daytimeGeneric ("de día",
+     * genérico, sin franja específica) al mismo bucket "afternoon"
+     * que usa la tarde real, así que este bloque de intent "comer"
+     * trataba "de día" igual que "de tarde" y siempre arrancaba a
+     * las 17:00. Ahora daytimeGeneric tiene su propio bucket "day",
+     * y esta rama le da un horario de mediodía coherente con
+     * STEPS_MIDDAY, sin tocar la rama de "afternoon" real.
+     */
+    if (timeBucket === "day") {
+      return [
+        {
+          key: "comer",
+          label: "PARA ARRANCAR",
+          time: "12:30",
+          pool: CENA,
+        },
+        {
+          key: "postre",
+          label: "SEGUIR",
+          time: "14:00",
+          pool: FINAL,
+        },
+        {
+          key: "cierre",
+          label: "PARA TERMINAR",
+          time: "15:30",
           pool: FINAL,
         },
       ];
