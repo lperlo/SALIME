@@ -435,6 +435,16 @@ const STEPS_AIRE_LIBRE = [
   },
 ];
 
+/*
+ * FIX (Güemes / "quiero comer en X"):
+ * El tercer paso usaba pool: PASEO, cuyo intent en POOL_KEYS es
+ * "paseo" (leisure.park / tourism.sights en api/lugares.js). Por eso
+ * un plan de "comer" terminaba pidiéndole a /api/lugares una plaza o
+ * un paseo para el último paso, y ese lugar (no gastronómico)
+ * terminaba mostrándose en pantalla. Ahora el cierre también pide
+ * intent "comer" (pool: FINAL), así los tres pasos son siempre
+ * lugares para comer.
+ */
 const STEPS_COMER = [
   {
     key: "comer",
@@ -449,10 +459,10 @@ const STEPS_COMER = [
     pool: FINAL,
   },
   {
-    key: "paseo",
+    key: "cierre",
     label: "PARA TERMINAR",
     time: "23:00",
-    pool: PASEO,
+    pool: FINAL,
   },
 ];
 
