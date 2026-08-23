@@ -1994,13 +1994,6 @@ function Timeline({
                 </div>
 
                 <div className="tl-card-meta">
-                  ⭐{" "}
-                  {step.venue ? ratingLabel(
-                    step
-                      .venue
-                      .rating
-                  ) : "—"}{" "}
-                  ·{" "}
                   {step.venue ? priceLabel(
                     step
                       .venue
