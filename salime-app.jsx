@@ -42,19 +42,30 @@ function normalizeLocation(value) {
   const clean = normalizeText(value).trim();
 
   const known = {
-    cordoba: "Córdoba",
     "nueva cordoba": "Nueva Córdoba",
     guemes: "Güemes",
     "alta cordoba": "Alta Córdoba",
     centro: "Centro",
+    cordoba: "Córdoba",
   };
 
   if (known[clean]) return known[clean];
 
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  // Si Gemini devuelve una frase completa, por ejemplo
+  // "Nueva Córdoba con mi pareja", extraemos solo la ubicación.
+  const keys = Object.keys(known).sort((a, b) => {
+    if (a === "cordoba") return 1;
+    if (b === "cordoba") return -1;
+    return b.length - a.length;
+  });
+
+  for (const key of keys) {
+    const escaped = key.replace(/\s+/g, "\\s+");
+    const re = new RegExp(`(^|[^a-z])${escaped}(?=$|[^a-z])`);
+    if (re.test(clean)) return known[key];
+  }
+
+  return value.trim();
 }
 
 const INTENT_LABEL = {
@@ -73,8 +84,39 @@ const VIBE_INTENT = {
   "Tomar algo": "beber",
   Paseo: "paseo",
   Cultura: "cultura",
+  "Aire libre": "aire_libre",
   Fiesta: "fiesta",
+  Familiar: "familia",
+  "Lo que salga": "general",
 };
+
+const TIME_FILTER = {
+  "De día": "day",
+  "De tarde": "afternoon",
+  "De noche": "night",
+  "Me da igual": null,
+};
+
+function shiftStepsToMoment(steps, moment) {
+  if (!moment || !steps || steps.length === 0) return steps;
+
+  const targetByMoment = {
+    day: 11 * 60,
+    afternoon: 16 * 60,
+    night: 20 * 60,
+  };
+
+  const target = targetByMoment[moment];
+  if (target === undefined) return steps;
+
+  const firstMinutes = timeToMinutes(steps[0].time);
+  const delta = target - firstMinutes;
+
+  return steps.map((step) => ({
+    ...step,
+    time: shiftTime(step.time, delta),
+  }));
+}
 
 /* ------------------------------------------------------------------ */
 /* Horarios demo (apertura/cierre por lugar)                          */
@@ -84,41 +126,7 @@ const VIBE_INTENT = {
  * Horarios demo de cada lugar. Los rangos que cruzan medianoche
  * (ej. "18:00" -> "02:00") están soportados por isOpenAt().
  */
-const DEMO_HOURS = {
-  "El Rincón de Mateo": ["10:00", "23:30"],
-  "Verde Oliva": ["12:00", "23:30"],
-  "Sabor a Barrio": ["12:00", "23:30"],
-  "Fuego Lento": ["13:00", "00:30"],
-  "La Terraza del Este": ["17:00", "01:00"],
-
-  "Vermutería Sur": ["12:00", "01:00"],
-  "El Aperitivo": ["16:00", "01:00"],
-  "Bar Federal": ["18:00", "02:00"],
-  "La Cervecería del Fondo": ["18:00", "02:00"],
-  "Mixología Nueva Córdoba": ["20:00", "02:00"],
-
-  "Heladería Cassata": ["11:00", "23:30"],
-  "Plaza San Martín de noche": ["20:00", "02:00"],
-  "Rooftop Calma": ["17:00", "00:30"],
-  "Jazz en el Sótano": ["21:00", "02:00"],
-  "Mirador del Cerro": ["16:00", "22:00"],
-
-  "Galería Horizonte": ["10:00", "18:00"],
-  "Museo del Centro": ["10:00", "18:00"],
-  "Teatro La Esquina": ["19:00", "23:30"],
-  "Centro de Arte Abierto": ["14:00", "20:00"],
-
-  "Paseo del Buen Pastor": ["10:00", "23:00"],
-  "Parque Sarmiento": ["08:00", "20:00"],
-  "Costanera del Río": ["08:00", "20:00"],
-
-  "Museo de los Niños": ["10:00", "18:00"],
-  "Confitería El Ciervo": ["08:00", "22:00"],
-  "Waffle & Co": ["09:00", "22:00"],
-  "Pizzería de la Cañada": ["12:00", "00:00"],
-  "La Parrillita Familiar": ["12:00", "00:00"],
-  "Patio de la Abuela": ["12:00", "23:30"],
-};
+const DEMO_HOURS = {};
 
 function timeToMinutes(timeStr) {
   const [h, m] = String(timeStr)
@@ -133,7 +141,13 @@ function isOpenAt(place, minute) {
     return true;
   }
 
-  const range = DEMO_HOURS[place.name];
+  /*
+   * Lugares reales (Geoapify) traen su propio horario en
+   * place.hours ([apertura, cierre]) cuando Geoapify lo informa.
+   * Si no lo trae, se asume abierto (igual que un lugar mock sin
+   * horario en DEMO_HOURS).
+   */
+  const range = place.hours || DEMO_HOURS[place.name];
 
   if (!range) return true;
 
@@ -149,578 +163,92 @@ function isOpenAt(place, minute) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Mock data — gastronomía                                             */
+/* Pools locales vacíos: la versión final usa exclusivamente Geoapify. */
 /* ------------------------------------------------------------------ */
 
-const CENA = [
-  {
-    name: "El Rincón de Mateo",
-    emoji: "🍽️",
-    price: 1,
-    rating: 4.5,
-    dist: 6,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon", "night"],
-    why: "cocina casera, mesas separadas, se puede hablar sin gritar",
-  },
-  {
-    name: "Verde Oliva",
-    emoji: "🥗",
-    price: 1,
-    rating: 4.4,
-    dist: 5,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "opciones livianas y un patio con plantas, buena onda tranquila",
-  },
-  {
-    name: "Sabor a Barrio",
-    emoji: "🍲",
-    price: 1,
-    rating: 4.3,
-    dist: 4,
-    mood: ["tranquilo", "animado"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "lugar chico, precio justo y atención re cálida",
-  },
-  {
-    name: "Fuego Lento",
-    emoji: "🔥",
-    price: 2,
-    rating: 4.6,
-    dist: 9,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "parrilla con buena música y mesas largas para grupo",
-  },
-  {
-    name: "La Terraza del Este",
-    emoji: "🌆",
-    price: 3,
-    rating: 4.7,
-    dist: 12,
-    mood: ["animado"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "vista linda y carta más elaborada, para una ocasión especial",
-  },
-];
+/* Pools locales vacíos: la versión final usa exclusivamente Geoapify. */
+const CENA = [];
+const BEBIDA = [];
+const FINAL = [];
+const CULTURA = [];
+const PASEO = [];
+const AIRE_LIBRE = [];
+const FIESTA = [];
+const ACTIVIDAD_FAMILIA = [];
+const MERIENDA_FAMILIA = [];
+const CIERRE_FAMILIA = [];
 
-const BEBIDA = [
-  {
-    name: "Vermutería Sur",
-    emoji: "🍹",
-    price: 1,
-    rating: 4.4,
-    dist: 3,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "vermú de la casa y mesas afuera, tranqui para seguir la charla",
-  },
-  {
-    name: "El Aperitivo",
-    emoji: "🥂",
-    price: 2,
-    rating: 4.5,
-    dist: 4,
-    mood: ["tranquilo", "animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "buena carta de tragos sin ser un boliche",
-  },
-  {
-    name: "Bar Federal",
-    emoji: "🍺",
-    price: 1,
-    rating: 4.3,
-    dist: 5,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "clásico del barrio, siempre tiene movimiento",
-  },
-  {
-    name: "La Cervecería del Fondo",
-    emoji: "🍻",
-    price: 2,
-    rating: 4.6,
-    dist: 7,
-    mood: ["animado"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "cerveza artesanal y patio con mesas compartidas",
-  },
-  {
-    name: "Mixología Nueva Córdoba",
-    emoji: "🍸",
-    price: 3,
-    rating: 4.7,
-    dist: 8,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: true,
-    slots: ["night"],
-    why: "coctelería de autor, para cerrar la noche en grande",
-  },
-];
+const POOL_KEYS = new Map([
+  [CENA, "comer"],
+  [BEBIDA, "beber"],
+  // FINAL se usa como cierre/postre: lo limitamos a lugares de comida
+  // para que nunca pueda devolver plazas u otros lugares genéricos.
+  [FINAL, "comer"],
+  [CULTURA, "cultura"],
+  [PASEO, "paseo"],
+  [AIRE_LIBRE, "aire_libre"],
+  [FIESTA, "fiesta"],
+  [ACTIVIDAD_FAMILIA, "familia"],
+  [MERIENDA_FAMILIA, "familia"],
+  [CIERRE_FAMILIA, "comer"],
+]);
 
-const FINAL = [
-  {
-    name: "Heladería Cassata",
-    emoji: "🍨",
-    price: 1,
-    rating: 4.6,
-    dist: 3,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon", "night"],
-    why: "un cierre dulce que nunca falla",
-  },
-  {
-    name: "Plaza San Martín de noche",
-    emoji: "🌳",
-    price: 1,
-    rating: 4.5,
-    dist: 4,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: true,
-    slots: ["night"],
-    why: "caminar un rato al aire libre después de comer",
-  },
-  {
-    name: "Rooftop Calma",
-    emoji: "🌙",
-    price: 2,
-    rating: 4.5,
-    dist: 6,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "terraza tranquila, buena para bajar el ritmo",
-  },
-  {
-    name: "Jazz en el Sótano",
-    emoji: "🎷",
-    price: 2,
-    rating: 4.6,
-    dist: 8,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: true,
-    slots: ["night"],
-    why: "música en vivo hasta tarde, para no cortar la noche",
-  },
-  {
-    name: "Mirador del Cerro",
-    emoji: "✨",
-    price: 1,
-    rating: 4.7,
-    dist: 10,
-    mood: ["animado", "tranquilo"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "una vista linda para cerrar el plan, aunque implica caminar un poco más",
-  },
-];
+/*
+ * Pide a api/lugares.js lugares reales de una categoría en una
+ * ciudad/zona. Si algo falla, devuelve [] para que el plan pueda
+ * informar que no encontró un lugar real, sin inventar nombres.
+ */
+async function fetchRealPool(poolKey, city) {
+  try {
+    const res = await fetch("/api/lugares", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ city, intent: poolKey }),
+    });
 
-/* ------------------------------------------------------------------ */
-/* Mock data — cultura                                                 */
-/* ------------------------------------------------------------------ */
+    if (!res.ok) return [];
 
-const CULTURA = [
-  {
-    name: "Galería Horizonte",
-    emoji: "🖼️",
-    price: 1,
-    rating: 4.6,
-    dist: 4,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "una muestra para recorrer sin apuro y descubrir algo distinto",
-  },
-  {
-    name: "Museo del Centro",
-    emoji: "🏛️",
-    price: 1,
-    rating: 4.5,
-    dist: 6,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "un recorrido cultural ideal para dedicarle un rato al plan",
-  },
-  {
-    name: "Teatro La Esquina",
-    emoji: "🎭",
-    price: 2,
-    rating: 4.7,
-    dist: 8,
-    mood: ["animado", "tranquilo"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: true,
-    slots: ["night"],
-    why: "una propuesta teatral para convertir la salida en una experiencia",
-  },
-  {
-    name: "Centro de Arte Abierto",
-    emoji: "🎨",
-    price: 1,
-    rating: 4.4,
-    dist: 5,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon"],
-    why: "arte y actividades para salir de la rutina",
-  },
-];
+    const data = await res.json();
 
-/* ------------------------------------------------------------------ */
-/* Mock data — paseo / aire libre                                      */
-/* ------------------------------------------------------------------ */
+    return Array.isArray(data.places) ? data.places : [];
+  } catch (err) {
+    return [];
+  }
+}
 
-const PASEO = [
-  {
-    name: "Paseo del Buen Pastor",
-    emoji: "🌳",
-    price: 1,
-    rating: 4.6,
-    dist: 4,
-    mood: ["tranquilo", "animado"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "un recorrido abierto para caminar y disfrutar el entorno",
-  },
-  {
-    name: "Parque Sarmiento",
-    emoji: "🌿",
-    price: 1,
-    rating: 4.6,
-    dist: 6,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "espacio verde para caminar, despejarse y bajar un cambio",
-  },
-  {
-    name: "Costanera del Río",
-    emoji: "🚶",
-    price: 1,
-    rating: 4.5,
-    dist: 8,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "un recorrido al aire libre para caminar sin apuro",
-  },
-  {
-    name: "Mirador del Cerro",
-    emoji: "✨",
-    price: 1,
-    rating: 4.7,
-    dist: 10,
-    mood: ["tranquilo", "animado"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "una vista linda para convertir el paseo en una experiencia",
-  },
-];
+/*
+ * Dado un conjunto de steps y una ciudad, devuelve un mapa
+ * { poolKey: [lugares reales] } solo para las categorías que realmente
+ * hacen falta en este plan, y solo si Geoapify encontró algo.
+ */
+async function fetchPoolOverrides(steps, city) {
+  if (!city) return {};
 
-/* ------------------------------------------------------------------ */
-/* Mock data — aire libre                                              */
-/* ------------------------------------------------------------------ */
+  const neededKeys = [
+    ...new Set(
+      steps
+        .map((step) => POOL_KEYS.get(step.pool))
+        .filter(Boolean)
+    ),
+  ];
 
-const AIRE_LIBRE = [
-  {
-    name: "Parque Sarmiento",
-    emoji: "🌳",
-    price: 1,
-    rating: 4.6,
-    dist: 5,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "espacio verde grande para estar afuera y disfrutar sin apuro",
-  },
-  {
-    name: "Paseo del Buen Pastor",
-    emoji: "🌿",
-    price: 1,
-    rating: 4.4,
-    dist: 6,
-    mood: ["animado", "tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "un espacio abierto para caminar y quedarse un rato afuera",
-  },
-  {
-    name: "Costanera del Río",
-    emoji: "🌊",
-    price: 1,
-    rating: 4.5,
-    dist: 8,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "aire libre y recorrido tranquilo para disfrutar el día",
-  },
-  {
-    name: "Mirador del Cerro",
-    emoji: "✨",
-    price: 1,
-    rating: 4.7,
-    dist: 10,
-    mood: ["tranquilo", "animado"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "una vista abierta para cerrar el plan con algo diferente",
-  },
-];
+  if (neededKeys.length === 0) return {};
 
-/* ------------------------------------------------------------------ */
-/* Mock data — fiesta                                                  */
-/* ------------------------------------------------------------------ */
+  const results = await Promise.all(
+    neededKeys.map(async (key) => [
+      key,
+      await fetchRealPool(key, city),
+    ])
+  );
 
-const FIESTA = [
-  {
-    name: "Bar Federal",
-    emoji: "🍺",
-    price: 1,
-    rating: 4.3,
-    dist: 5,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["night"],
-    why: "un lugar con movimiento para arrancar la noche",
-  },
-  {
-    name: "La Cervecería del Fondo",
-    emoji: "🍻",
-    price: 2,
-    rating: 4.6,
-    dist: 7,
-    mood: ["animado"],
-    outdoor: true,
-    kidFriendly: false,
-    nightOnly: false,
-    slots: ["night"],
-    why: "cerveza y ambiente con energía para entrar en clima",
-  },
-  {
-    name: "Mixología Nueva Córdoba",
-    emoji: "🍸",
-    price: 3,
-    rating: 4.7,
-    dist: 8,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: true,
-    slots: ["night"],
-    why: "tragos y ambiente nocturno para seguir la salida",
-  },
-  {
-    name: "Jazz en el Sótano",
-    emoji: "🎷",
-    price: 2,
-    rating: 4.6,
-    dist: 8,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: false,
-    nightOnly: true,
-    slots: ["night"],
-    why: "música en vivo para darle más energía a la noche",
-  },
-];
+  const overrides = {};
 
-/* ------------------------------------------------------------------ */
-/* Mock data — familia                                                 */
-/* ------------------------------------------------------------------ */
+  for (const [key, places] of results) {
+    overrides[key] = places;
+  }
 
-const ACTIVIDAD_FAMILIA = [
-  {
-    name: "Parque Sarmiento",
-    emoji: "🌳",
-    price: 1,
-    rating: 4.6,
-    dist: 5,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "espacio verde grande con juegos, ideal para que los chicos corran un rato",
-  },
-  {
-    name: "Museo de los Niños",
-    emoji: "🎨",
-    price: 1,
-    rating: 4.5,
-    dist: 7,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["morning", "afternoon"],
-    why: "actividades interactivas pensadas para chicos",
-  },
-  {
-    name: "Paseo del Buen Pastor",
-    emoji: "🎡",
-    price: 1,
-    rating: 4.4,
-    dist: 6,
-    mood: ["animado", "tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon"],
-    why: "patio abierto con espacio para jugar y algo de sombra",
-  },
-];
-
-const MERIENDA_FAMILIA = [
-  {
-    name: "Heladería Cassata",
-    emoji: "🍨",
-    price: 1,
-    rating: 4.6,
-    dist: 3,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon"],
-    why: "una parada dulce que nunca falla con chicos",
-  },
-  {
-    name: "Confitería El Ciervo",
-    emoji: "🧁",
-    price: 1,
-    rating: 4.5,
-    dist: 4,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon"],
-    why: "merienda tranquila con mesas amplias para toda la familia",
-  },
-  {
-    name: "Waffle & Co",
-    emoji: "🧇",
-    price: 2,
-    rating: 4.4,
-    dist: 5,
-    mood: ["animado"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon"],
-    why: "terraza informal, buena opción si los chicos siguen con energía",
-  },
-];
-
-const CIERRE_FAMILIA = [
-  {
-    name: "Pizzería de la Cañada",
-    emoji: "🍕",
-    price: 1,
-    rating: 4.5,
-    dist: 4,
-    mood: ["animado"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "pizza para compartir y ambiente relajado para cerrar temprano",
-  },
-  {
-    name: "La Parrillita Familiar",
-    emoji: "🍖",
-    price: 2,
-    rating: 4.6,
-    dist: 6,
-    mood: ["tranquilo"],
-    outdoor: false,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "menú simple y raciones para compartir, pensado para ir con chicos",
-  },
-  {
-    name: "Patio de la Abuela",
-    emoji: "🍝",
-    price: 1,
-    rating: 4.4,
-    dist: 5,
-    mood: ["tranquilo"],
-    outdoor: true,
-    kidFriendly: true,
-    nightOnly: false,
-    slots: ["afternoon", "night"],
-    why: "patio tranquilo, cena liviana antes de volver a casa",
-  },
-];
+  return overrides;
+}
 
 /* ------------------------------------------------------------------ */
 /* Plantillas                                                          */
@@ -836,10 +364,8 @@ const STEPS_FAMILY = [
 /* ------------------------------------------------------------------ */
 
 /*
- * Ahora el segundo paso también sale del pool de CULTURA (en vez de
- * merienda), para que la intención cultural pese más en la estructura
- * del plan. Si a esa hora no queda ningún lugar cultural abierto,
- * pick() cae de forma natural a su fallback habitual.
+ * Los tres pasos permanecen dentro de CULTURA para que un plan cultural
+ * no termine accidentalmente en un parque, calle o lugar genérico.
  */
 const STEPS_CULTURA = [
   {
@@ -855,10 +381,10 @@ const STEPS_CULTURA = [
     pool: CULTURA,
   },
   {
-    key: "paseo",
+    key: "cultura_3",
     label: "PARA TERMINAR",
     time: "19:30",
-    pool: PASEO,
+    pool: CULTURA,
   },
 ];
 
@@ -909,6 +435,16 @@ const STEPS_AIRE_LIBRE = [
   },
 ];
 
+/*
+ * FIX (Güemes / "quiero comer en X"):
+ * El tercer paso usaba pool: PASEO, cuyo intent en POOL_KEYS es
+ * "paseo" (leisure.park / tourism.sights en api/lugares.js). Por eso
+ * un plan de "comer" terminaba pidiéndole a /api/lugares una plaza o
+ * un paseo para el último paso, y ese lugar (no gastronómico)
+ * terminaba mostrándose en pantalla. Ahora el cierre también pide
+ * intent "comer" (pool: FINAL), así los tres pasos son siempre
+ * lugares para comer.
+ */
 const STEPS_COMER = [
   {
     key: "comer",
@@ -923,10 +459,10 @@ const STEPS_COMER = [
     pool: FINAL,
   },
   {
-    key: "paseo",
+    key: "cierre",
     label: "PARA TERMINAR",
     time: "23:00",
-    pool: PASEO,
+    pool: FINAL,
   },
 ];
 
@@ -1038,12 +574,32 @@ function parseInputHeuristic(text) {
     earlier: false,
   };
 
-  const locMatch = t.match(
-    /en ([a-z\s]+?)(,|\.|$| que| y | somos| quiero| queremos)/
-  );
+  // Primero buscamos barrios/ciudades que conocemos. Esto permite
+  // reconocer frases como "Nueva Córdoba con mi pareja".
+  const knownLocationPatterns = [
+    ["nueva cordoba", "Nueva Córdoba"],
+    ["alta cordoba", "Alta Córdoba"],
+    ["guemes", "Güemes"],
+    ["centro", "Centro"],
+    ["cordoba", "Córdoba"],
+  ];
 
-  if (locMatch) {
-    out.location = normalizeLocation(locMatch[1].trim());
+  for (const [key, label] of knownLocationPatterns) {
+    const escaped = key.replace(/\s+/g, "\\s+");
+    if (new RegExp(`\\b${escaped}\\b`).test(t)) {
+      out.location = label;
+      break;
+    }
+  }
+
+  if (!out.location) {
+    const locMatch = t.match(
+      /(?:en|desde|por|cerca de)\s+([a-záéíóúüñ\s]+?)(?=,|\.|$|\s+(?:con|somos|quiero|queremos|para|y)\b)/
+    );
+
+    if (locMatch) {
+      out.location = normalizeLocation(locMatch[1].trim());
+    }
   }
 
   if (/\bsolo\b|\bsola\b/.test(t)) {
@@ -1218,6 +774,19 @@ async function parseInputAI(text) {
  */
 function mergeInterpretations(ai, local) {
   const merged = { ...ai };
+
+  // La ubicación detectada directamente en el texto tiene prioridad.
+  // Evita que Gemini convierta "Nueva Córdoba con mi pareja" en una
+  // ubicación literal con toda la frase.
+  if (local.location) {
+    merged.location = local.location;
+  }
+
+  // Si la heurística local detecta una intención explícita,
+  // tiene prioridad sobre una interpretación diferente de Gemini.
+  if (local.intent && local.intent !== "general") {
+    merged.intent = local.intent;
+  }
 
   if (local.explicitHour === null || local.explicitHour === undefined) {
     merged.explicitHour = null;
@@ -1486,6 +1055,17 @@ function getSteps({
     /*
      * Si pide comer a la mañana/tarde, mantenemos horarios
      * coherentes en vez de obligarlo a cenar.
+     *
+     * FIX (plazas/plazoletas apareciendo en planes de "comer" con
+     * franja mañana/tarde, ej. "Plazoleta Comandante Coronel Anibal
+     * Montes", "Plaza Sarmiento"):
+     *
+     * Estas dos variantes usaban pool: MERIENDA_FAMILIA (intent
+     * "familia": parques, museos, restaurantes mezclados) y
+     * pool: PASEO (intent "paseo": parques, sitios turísticos) para
+     * el 2do y 3er paso. Un plan de "comer" terminaba pidiéndole a
+     * /api/lugares categorías que no son de comida. Ahora los tres
+     * pasos usan pools que mapean a intent "comer" (CENA/FINAL).
      */
     if (timeBucket === "morning") {
       return [
@@ -1499,13 +1079,13 @@ function getSteps({
           key: "cafe",
           label: "SEGUIR",
           time: "12:00",
-          pool: MERIENDA_FAMILIA,
+          pool: FINAL,
         },
         {
-          key: "paseo",
+          key: "cierre",
           label: "PARA TERMINAR",
           time: "13:30",
-          pool: PASEO,
+          pool: FINAL,
         },
       ];
     }
@@ -1524,13 +1104,13 @@ function getSteps({
           key: "postre",
           label: "SEGUIR",
           time: "18:30",
-          pool: MERIENDA_FAMILIA,
+          pool: FINAL,
         },
         {
-          key: "paseo",
+          key: "cierre",
           label: "PARA TERMINAR",
           time: "20:00",
-          pool: PASEO,
+          pool: FINAL,
         },
       ];
     }
@@ -1580,7 +1160,7 @@ function getSteps({
 /* Generación del plan                                                 */
 /* ------------------------------------------------------------------ */
 
-function generatePlan({
+async function generatePlan({
   budgetLabel,
   moodLabel,
   close,
@@ -1595,6 +1175,8 @@ function generatePlan({
   random,
   excludeNames,
   intent = "general",
+  location,
+  moment = null,
 } = {}) {
   const budgetTier = random
     ? null
@@ -1612,7 +1194,7 @@ function generatePlan({
     night,
   });
 
-  const steps = getSteps({
+  let steps = getSteps({
     intent,
     hasKids,
     morning,
@@ -1621,6 +1203,22 @@ function generatePlan({
     timeBucket,
     random,
   });
+
+  // Si la persona eligió manualmente día/tarde/noche, movemos el
+  // horario completo del plan a esa franja. La hora exacta sigue
+  // teniendo prioridad porque usa timeShiftMin.
+  if (moment && !random) {
+    steps = shiftStepsToMoment(steps, moment);
+  }
+
+  /*
+   * La versión final usa exclusivamente lugares reales.
+   * Con ciudad/barrio, cada categoría se consulta en Geoapify.
+   * Si Geoapify falla o no encuentra resultados, el pool queda vacío.
+   */
+  const poolOverrides = location && String(location).trim()
+    ? await fetchPoolOverrides(steps, location)
+    : {};
 
   const allowNightOnly =
     random ||
@@ -1646,7 +1244,15 @@ function generatePlan({
 
     const exactMinute = timeToMinutes(time);
 
-    const venue = pick(step.pool, {
+    const poolKey = POOL_KEYS.get(step.pool);
+
+    // Solo aceptamos lugares que vinieron de Geoapify.
+    // Si no hay resultados reales, el pool queda vacío.
+    const activePool = location && String(location).trim() && poolKey
+      ? (poolOverrides[poolKey] || [])
+      : [];
+
+    const venue = pick(activePool, {
       budgetTier,
       mood,
       close: random ? false : close,
@@ -1665,13 +1271,13 @@ function generatePlan({
     /*
      * Salvaguarda por si un pool se queda sin opciones.
      */
-    const safeVenue =
-      venue ||
-      step.pool[0];
+    // Si Geoapify no devuelve un lugar real adecuado, venue queda en null
+    // y la interfaz informa el problema sin inventar un nombre.
+    const safeVenue = venue || null;
 
-    usedNames.push(
-      safeVenue.name
-    );
+    if (safeVenue) {
+      usedNames.push(safeVenue.name);
+    }
 
     return {
       ...step,
@@ -1697,13 +1303,8 @@ const priceLabel = (n) =>
 const ratingLabel = (n) =>
   n.toFixed(1).replace(".", ",");
 
-const distanceLabel = (
-  i,
-  dist
-) =>
-  i === 0
-    ? `${dist} min caminando`
-    : `${dist} min desde la parada anterior`;
+const distanceLabel = (i, dist) =>
+  `${dist} min caminando aprox.`;
 
 /* ------------------------------------------------------------------ */
 /* Small building blocks                                               */
@@ -1812,6 +1413,7 @@ function HomeScreen({
       budget: null,
       people: null,
       vibe: null,
+      moment: null,
     });
 
   const understood =
@@ -1882,9 +1484,15 @@ function HomeScreen({
     );
   }
 
-  if (understood.outdoor) {
+  if (understood.outdoor && !filters.vibe) {
     understoodChips.push(
       "🌿 Al aire libre"
+    );
+  }
+
+  if (filters.moment) {
+    understoodChips.push(
+      `🕐 ${filters.moment}`
     );
   }
 
@@ -1968,6 +1576,13 @@ function HomeScreen({
         filters.people ||
         interpreted.people;
 
+      if (!location) {
+        window.alert(
+          "Para darte lugares reales necesito una ciudad o barrio. Escribilo en tu pedido, por ejemplo: Estoy en Rosario."
+        );
+        return;
+      }
+
       let morning =
         !!interpreted.morning;
 
@@ -1980,11 +1595,34 @@ function HomeScreen({
       let daytimeGeneric =
         !!interpreted.daytimeGeneric;
 
+      // El selector manual de momento tiene prioridad sobre la
+      // franja que haya inferido el texto.
+      const selectedMoment =
+        TIME_FILTER[filters.moment] || null;
+
+      if (selectedMoment === "day") {
+        morning = false;
+        afternoon = false;
+        night = false;
+        daytimeGeneric = true;
+      } else if (selectedMoment === "afternoon") {
+        morning = false;
+        afternoon = true;
+        night = false;
+        daytimeGeneric = false;
+      } else if (selectedMoment === "night") {
+        morning = false;
+        afternoon = false;
+        night = true;
+        daytimeGeneric = false;
+      }
+
       const explicitHour =
         interpreted.explicitHour;
 
       /*
-       * Una hora exacta tiene prioridad.
+       * Una hora exacta tiene prioridad incluso sobre el selector
+       * manual de momento.
        */
       if (
         explicitHour !== null &&
@@ -2091,6 +1729,10 @@ function HomeScreen({
         );
       }
 
+      if (filters.moment && filters.moment !== "Me da igual") {
+        context.push(`🕐 ${filters.moment}`);
+      }
+
       if (outdoor) {
         context.push(
           "🌿 al aire libre"
@@ -2118,6 +1760,7 @@ function HomeScreen({
         afternoon,
         night,
         daytimeGeneric,
+        moment: filters.moment || null,
         explicitHour,
         timeShiftMin,
         intent,
@@ -2229,21 +1872,44 @@ function HomeScreen({
 
         <Chip
           icon={Sparkles}
-          placeholder="Qué onda"
+          placeholder="Tipo de plan"
           value={
             filters.vibe
           }
           options={[
             "Comer",
             "Tomar algo",
-            "Paseo",
             "Cultura",
+            "Paseo",
+            "Aire libre",
             "Fiesta",
+            "Familiar",
+            "Lo que salga",
           ]}
           onChange={(v) =>
             setFilters((f) => ({
               ...f,
               vibe: v,
+            }))
+          }
+        />
+
+        <Chip
+          icon={Sparkles}
+          placeholder="Momento"
+          value={
+            filters.moment
+          }
+          options={[
+            "De día",
+            "De tarde",
+            "De noche",
+            "Me da igual",
+          ]}
+          onChange={(v) =>
+            setFilters((f) => ({
+              ...f,
+              moment: v,
             }))
           }
         />
@@ -2296,8 +1962,7 @@ function Timeline({
                 }`}
               >
                 {
-                  step.venue
-                    .emoji
+                  step.venue ? step.venue.emoji : "—"
                 }
               </div>
 
@@ -2323,44 +1988,51 @@ function Timeline({
 
               <div className="tl-card">
                 <div className="tl-card-name">
-                  {
-                    step
-                      .venue
-                      .name
-                  }
+                  {step.venue
+                    ? step.venue.name
+                    : "No encontramos un lugar real adecuado"}
                 </div>
 
                 <div className="tl-card-meta">
                   ⭐{" "}
-                  {ratingLabel(
+                  {step.venue ? ratingLabel(
                     step
                       .venue
                       .rating
-                  )}{" "}
+                  ) : "—"}{" "}
                   ·{" "}
-                  {priceLabel(
+                  {step.venue ? priceLabel(
                     step
                       .venue
                       .price
-                  )}{" "}
+                  ) : "—"}{" "}
                   · 📍{" "}
-                  {distanceLabel(
+                  {step.venue ? distanceLabel(
                     i,
                     step
                       .venue
                       .dist
-                  )}
+                  ) : "No disponible"}
                 </div>
 
-                <p className="tl-card-why">
-                  Porque{" "}
-                  {
-                    step
-                      .venue
-                      .why
-                  }
-                  .
-                </p>
+                {step.venue ? (
+                  <>
+                    {step.venue.address && (
+                      <p className="tl-card-address">
+                        📍 {step.venue.address}
+                      </p>
+                    )}
+                    {step.venue.hours && (
+                      <p className="tl-card-hours">
+                        🕐 Horario disponible: {step.venue.hours[0]}–{step.venue.hours[1]}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="tl-card-why">
+                    No encontramos un lugar real adecuado para este paso en esa zona.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -2723,7 +2395,7 @@ export default function App() {
       "generating"
     );
 
-    afterDelay(700, () => {
+    afterDelay(700, async () => {
       setSurprise(false);
 
       setContextLine(
@@ -2731,7 +2403,7 @@ export default function App() {
       );
 
       setPlan(
-        generatePlan(
+        await generatePlan(
           opts
         )
       );
@@ -2740,28 +2412,36 @@ export default function App() {
     });
   };
 
-  const handleSurprise =
-    () => {
-      setGeneratingLabel(
-        "Armando algo inesperado…"
+  const handleSurprise = () => {
+    const typedLocation = window.prompt(
+      "¿En qué ciudad o barrio estás? Necesitamos una ubicación para sorprenderte con lugares reales."
+    );
+
+    const location = typedLocation && typedLocation.trim()
+      ? normalizeLocation(typedLocation.trim())
+      : null;
+
+    if (!location) return;
+
+    setLastFilters({ random: true, location });
+    setGeneratingLabel(
+      "Buscando una sorpresa real cerca tuyo…"
+    );
+
+    setScreen("generating");
+
+    afterDelay(500, async () => {
+      setSurprise(true);
+      setContextLine(`📍 ${location}`);
+      setPlan(
+        await generatePlan({
+          random: true,
+          location,
+        })
       );
-
-      setScreen(
-        "generating"
-      );
-
-      afterDelay(700, () => {
-        setSurprise(true);
-
-        setPlan(
-          generatePlan({
-            random: true,
-          })
-        );
-
-        setScreen("result");
-      });
-    };
+      setScreen("result");
+    });
+  };
 
   const runRegeneration =
     (next) => {
@@ -2775,11 +2455,11 @@ export default function App() {
 
       setWorking(true);
 
-      afterDelay(450, () => {
+      afterDelay(450, async () => {
         setLastFilters(next);
 
         setPlan(
-          generatePlan({
+          await generatePlan({
             ...next,
             excludeNames,
           })
@@ -2789,11 +2469,11 @@ export default function App() {
       });
     };
 
-  const handleReshuffle =
-    () =>
-      runRegeneration({
-        random: true,
-      });
+  const handleReshuffle = () =>
+    runRegeneration({
+      random: true,
+      location: lastFilters.location || null,
+    });
 
   const handleQuickAdjust =
     (type) => {
@@ -2868,6 +2548,9 @@ export default function App() {
 
           daytimeGeneric:
             lastFilters.daytimeGeneric,
+
+          moment:
+            lastFilters.moment || null,
 
           explicitHour:
             lastFilters.explicitHour ??
@@ -3487,12 +3170,14 @@ export default function App() {
           margin-bottom: 8px;
         }
 
+        .tl-card-address,
+        .tl-card-hours,
         .tl-card-why {
           font-size: 13.5px;
           line-height: 1.45;
           color: ${C.text};
           opacity: 0.85;
-          margin: 0;
+          margin: 0 0 5px;
         }
       `}</style>
 
@@ -3569,4 +3254,4 @@ export default function App() {
       </div>
     </div>
   );
-}
+      }
