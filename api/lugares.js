@@ -1,23 +1,29 @@
 /* ------------------------------------------------------------------ */
 /* api/lugares.js                                                     */
 /*                                                                    */
-/* Busca lugares reales con OpenStreetMap + Overpass.                 */
+/* SALIME - búsqueda de lugares reales                                */
 /*                                                                    */
+/* Fuente: OpenStreetMap / Overpass                                   */
+/*                                                                    */
+/* IMPORTANTE:                                                        */
 /* - No usa Geoapify.                                                 */
-/* - No necesita GEOAPIFY_API_KEY.                                    */
-/* - Mantiene el formato que espera SALIME.                            */
-/* - Nunca inventa lugares.                                           */
-/* - Si no encuentra lugares adecuados devuelve places: [].           */
+/* - No usa lugares hardcodeados.                                     */
+/* - No inventa nombres de lugares.                                   */
+/* - No devuelve plazas cuando la intención es COMER.                 */
+/* - Si no encuentra lugares reales, devuelve places: [].             */
 /* ------------------------------------------------------------------ */
+
+const OVERPASS_SERVERS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+];
 
 const NOMINATIM_URL =
   "https://nominatim.openstreetmap.org/search";
 
-const OVERPASS_URL =
-  "https://overpass-api.de/api/interpreter";
-
 /* ------------------------------------------------------------------ */
-/* CATEGORÍAS                                                         */
+/* INTENCIONES                                                        */
 /* ------------------------------------------------------------------ */
 
 const INTENT_CATEGORIES = {
@@ -73,8 +79,6 @@ const INTENT_CATEGORIES = {
     "pub",
   ],
 
-  /* Compatibilidad con el frontend anterior */
-
   CENA: [
     "restaurant",
     "fast_food",
@@ -125,6 +129,8 @@ const INTENT_CATEGORIES = {
 
   MERIENDA_FAMILIA: [
     "cafe",
+    "restaurant",
+    "fast_food",
   ],
 
   CIERRE_FAMILIA: [
@@ -153,13 +159,13 @@ const KNOWN_LOCATIONS = {
 
   "alta cordoba": {
     lat: -31.39854,
-    lon: -64.1807,
+    lon: -64.18070,
     label: "Alta Córdoba, Córdoba, Argentina",
   },
 
   "general paz": {
     lat: -31.40955,
-    lon: -64.1715,
+    lon: -64.17150,
     label: "General Paz, Córdoba, Argentina",
   },
 
@@ -171,7 +177,7 @@ const KNOWN_LOCATIONS = {
 };
 
 /* ------------------------------------------------------------------ */
-/* UTILIDADES                                                         */
+/* NORMALIZACIÓN                                                      */
 /* ------------------------------------------------------------------ */
 
 function normalizeText(value) {
@@ -182,6 +188,10 @@ function normalizeText(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ");
 }
+
+/* ------------------------------------------------------------------ */
+/* DISTANCIA                                                          */
+/* ------------------------------------------------------------------ */
 
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -208,6 +218,32 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* EMOJIS                                                             */
+/* ------------------------------------------------------------------ */
+
+function emojiFor(amenity) {
+  if (amenity === "restaurant") return "🍽️";
+  if (amenity === "fast_food") return "🍔";
+  if (amenity === "cafe") return "☕";
+  if (amenity === "food_court") return "🍴";
+  if (amenity === "bar") return "🍺";
+  if (amenity === "pub") return "🍺";
+  if (amenity === "nightclub") return "🎉";
+  if (amenity === "museum") return "🖼️";
+  if (amenity === "arts_centre") return "🎨";
+  if (amenity === "theatre") return "🎭";
+  if (amenity === "gallery") return "🖼️";
+  if (amenity === "park") return "🌳";
+  if (amenity === "playground") return "🎡";
+
+  return "📍";
+}
+
+/* ------------------------------------------------------------------ */
+/* HORARIOS                                                           */
+/* ------------------------------------------------------------------ */
+
 function parseSimpleHours(raw) {
   if (!raw || typeof raw !== "string") {
     return null;
@@ -221,31 +257,41 @@ function parseSimpleHours(raw) {
     return null;
   }
 
-  return [match[1], match[2]];
-}
-
-function emojiFor(amenity) {
-  if (amenity === "fast_food") return "🍔";
-  if (amenity === "cafe") return "☕";
-  if (amenity === "bar") return "🍺";
-  if (amenity === "pub") return "🍺";
-  if (amenity === "nightclub") return "🎉";
-  if (amenity === "museum") return "🖼️";
-  if (amenity === "arts_centre") return "🎨";
-  if (amenity === "theatre") return "🎭";
-  if (amenity === "gallery") return "🖼️";
-  if (amenity === "park") return "🌳";
-  if (amenity === "playground") return "🎡";
-
-  return "🍽️";
+  return [
+    match[1],
+    match[2],
+  ];
 }
 
 /* ------------------------------------------------------------------ */
-/* RESOLVER UBICACIÓN                                                 */
+/* PRECIO                                                             */
+/* ------------------------------------------------------------------ */
+
+function estimatePrice(amenity) {
+  if (
+    amenity === "fast_food" ||
+    amenity === "cafe"
+  ) {
+    return 1;
+  }
+
+  if (
+    amenity === "bar" ||
+    amenity === "pub"
+  ) {
+    return 2;
+  }
+
+  return 2;
+}
+
+/* ------------------------------------------------------------------ */
+/* RESOLVER DE UBICACIÓN                                              */
 /* ------------------------------------------------------------------ */
 
 async function geocodeLocation(text) {
-  const query = String(text || "").trim();
+  const query =
+    String(text || "").trim();
 
   if (!query) {
     return null;
@@ -260,20 +306,22 @@ async function geocodeLocation(text) {
       .trim();
 
   /*
-   * Primero buscamos barrios conocidos.
-   * Esto evita que Güemes sea interpretado
-   * como otra localidad.
+   * Primero resolvemos barrios conocidos
+   * directamente en Córdoba.
+   *
+   * Esto evita que "Güemes" sea tratado
+   * como una ciudad diferente.
    */
 
   if (KNOWN_LOCATIONS[normalized]) {
     return {
       ...KNOWN_LOCATIONS[normalized],
-      placeId: null,
     };
   }
 
   /*
-   * Para otros lugares usamos Nominatim.
+   * Para lugares que no conocemos,
+   * usamos Nominatim.
    */
 
   const url =
@@ -286,13 +334,15 @@ async function geocodeLocation(text) {
       `${query}, Córdoba, Argentina`
     );
 
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent":
-        "SALIME/1.0",
-    },
-  });
+  const response =
+    await fetch(url, {
+      headers: {
+        Accept:
+          "application/json",
+        "User-Agent":
+          "SALIME/1.0",
+      },
+    });
 
   if (!response.ok) {
     throw new Error(
@@ -351,6 +401,8 @@ async function geocodeLocation(text) {
           "quarter",
           "district",
           "city",
+          "town",
+          "village",
         ].includes(type)
       ) {
         score += 20;
@@ -397,10 +449,12 @@ async function geocodeLocation(text) {
 }
 
 /* ------------------------------------------------------------------ */
-/* BUSCAR LUGARES EN OPENSTREETMAP                                   */
+/* CONSULTA OVERPASS                                                  */
 /* ------------------------------------------------------------------ */
 
-function buildAmenityRegex(amenities) {
+function buildAmenityRegex(
+  amenities
+) {
   return amenities
     .map((value) =>
       value.replace(
@@ -411,50 +465,30 @@ function buildAmenityRegex(amenities) {
     .join("|");
 }
 
-async function searchPlaces({
-  lat,
-  lon,
-  amenities,
-  radius = 1800,
-}) {
-  const regex =
-    buildAmenityRegex(
-      amenities
+async function queryOverpass(
+  endpoint,
+  query
+) {
+  const response =
+    await fetch(
+      endpoint,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+          "User-Agent":
+            "SALIME/1.0",
+        },
+
+        body:
+          "data=" +
+          encodeURIComponent(
+            query
+          ),
+      }
     );
-
-  const query = `
-[out:json][timeout:25];
-
-(
-  nwr[
-    "amenity"~"^(${regex})$"
-  ](
-    around:${radius},
-    ${lat},
-    ${lon}
-  );
-);
-
-out center tags;
-`;
-
-  const response = await fetch(
-    OVERPASS_URL,
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type":
-          "application/x-www-form-urlencoded",
-        "User-Agent":
-          "SALIME/1.0",
-      },
-
-      body:
-        "data=" +
-        encodeURIComponent(query),
-    }
-  );
 
   if (!response.ok) {
     throw new Error(
@@ -467,7 +501,9 @@ out center tags;
 
   if (
     !data ||
-    !Array.isArray(data.elements)
+    !Array.isArray(
+      data.elements
+    )
   ) {
     return [];
   }
@@ -476,13 +512,91 @@ out center tags;
 }
 
 /* ------------------------------------------------------------------ */
-/* COORDENADAS                                                        */
+/* BUSCAR LUGARES                                                     */
 /* ------------------------------------------------------------------ */
 
-function getCoordinates(element) {
+async function searchPlaces({
+  lat,
+  lon,
+  amenities,
+}) {
+  const regex =
+    buildAmenityRegex(
+      amenities
+    );
+
+  /*
+   * 3 km permite encontrar suficientes
+   * negocios incluso si el centroide
+   * del barrio no cae exactamente en
+   * la zona comercial.
+   */
+
+  const query = `
+[out:json][timeout:30];
+
+(
+  nwr[
+    "amenity"~"^(${regex})$"
+  ](
+    around:3000,
+    ${lat},
+    ${lon}
+  );
+);
+
+out center tags;
+`;
+
+  /*
+   * Probamos varios servidores.
+   *
+   * Si uno está caído o saturado,
+   * usamos el siguiente.
+   */
+
+  for (
+    const endpoint of OVERPASS_SERVERS
+  ) {
+    try {
+      const results =
+        await queryOverpass(
+          endpoint,
+          query
+        );
+
+      if (
+        Array.isArray(results) &&
+        results.length > 0
+      ) {
+        return results;
+      }
+    } catch (error) {
+      console.error(
+        "Overpass falló:",
+        endpoint,
+        error?.message
+      );
+    }
+  }
+
+  return [];
+}
+
+/* ------------------------------------------------------------------ */
+/* COORDENADAS                                                         */
+/* ------------------------------------------------------------------ */
+
+function getCoordinates(
+  element
+) {
   if (
-    Number.isFinite(element.lat) &&
-    Number.isFinite(element.lon)
+    Number.isFinite(
+      element.lat
+    ) &&
+    Number.isFinite(
+      element.lon
+    )
   ) {
     return [
       element.lat,
@@ -505,56 +619,148 @@ function getCoordinates(element) {
     ];
   }
 
-  return [null, null];
+  return [
+    null,
+    null,
+  ];
 }
 
 /* ------------------------------------------------------------------ */
-/* CONVERTIR RESULTADO                                                */
+/* FILTROS DE LUGAR                                                   */
 /* ------------------------------------------------------------------ */
 
-function mapElementToVenue(
-  element,
-  center,
-  intent
+function isClosedOrDisused(
+  tags
 ) {
-  const tags =
-    element?.tags || {};
-
-  const name = String(
-    tags.name ||
-      tags["name:es"] ||
-      ""
-  ).trim();
-
-  /*
-   * Si no tiene nombre, no lo mostramos.
-   */
-
-  if (!name) {
-    return null;
-  }
-
   const amenity =
     normalizeText(
       tags.amenity
     );
 
+  const lifecycleValues = [
+    normalizeText(
+      tags.disused
+    ),
+    normalizeText(
+      tags.abandoned
+    ),
+    normalizeText(
+      tags.demolished
+    ),
+    normalizeText(
+      tags["disused:amenity"]
+    ),
+    normalizeText(
+      tags["abandoned:amenity"]
+    ),
+  ];
+
+  if (
+    lifecycleValues.some(
+      (value) =>
+        value &&
+        (
+          value === "yes" ||
+          value === "true" ||
+          value === "restaurant" ||
+          value === "cafe" ||
+          value === "fast_food" ||
+          value === "bar"
+        )
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    amenity === "restaurant" &&
+    normalizeText(
+      tags["restaurant:type"]
+    ) === "closed"
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasRealName(tags) {
+  const name =
+    String(
+      tags.name ||
+      tags["name:es"] ||
+      ""
+    ).trim();
+
+  if (!name) {
+    return false;
+  }
+
+  if (
+    /^\d{1,6}$/.test(name)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesIntent(
+  tags,
+  allowedAmenities
+) {
+  const amenity =
+    normalizeText(
+      tags.amenity
+    );
+
+  return allowedAmenities.includes(
+    amenity
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* CONVERTIR A FORMATO SALIME                                         */
+/* ------------------------------------------------------------------ */
+
+function mapElementToVenue(
+  element,
+  center,
+  intent,
+  allowedAmenities
+) {
+  const tags =
+    element?.tags || {};
+
   /*
-   * REGLA FUNDAMENTAL:
-   *
-   * Si la intención es COMER,
-   * solamente aceptamos lugares
-   * gastronómicos.
+   * Sin nombre real no mostramos nada.
+   */
+
+  if (!hasRealName(tags)) {
+    return null;
+  }
+
+  /*
+   * Excluir negocios marcados
+   * como cerrados/abandonados.
    */
 
   if (
-    intent === "comer" &&
-    ![
-      "restaurant",
-      "fast_food",
-      "cafe",
-      "food_court",
-    ].includes(amenity)
+    isClosedOrDisused(tags)
+  ) {
+    return null;
+  }
+
+  /*
+   * Excluir cualquier categoría
+   * que no corresponda a la intención.
+   */
+
+  if (
+    !matchesIntent(
+      tags,
+      allowedAmenities
+    )
   ) {
     return null;
   }
@@ -562,7 +768,8 @@ function mapElementToVenue(
   const [
     lat,
     lon,
-  ] = getCoordinates(element);
+  ] =
+    getCoordinates(element);
 
   if (
     !Number.isFinite(lat) ||
@@ -570,6 +777,11 @@ function mapElementToVenue(
   ) {
     return null;
   }
+
+  const amenity =
+    normalizeText(
+      tags.amenity
+    );
 
   const distanceKm =
     haversineKm(
@@ -583,18 +795,45 @@ function mapElementToVenue(
     Math.max(
       1,
       Math.round(
-        (distanceKm / 4.5) * 60
+        (distanceKm / 4.5) *
+          60
       )
     );
 
-  const address =
+  const name =
+    String(
+      tags.name ||
+      tags["name:es"]
+    ).trim();
+
+  const street =
     [
       tags["addr:street"],
       tags["addr:housenumber"],
     ]
       .filter(Boolean)
-      .join(" ") ||
-      null;
+      .join(" ")
+      .trim();
+
+  const neighborhood =
+    tags["addr:suburb"] ||
+    tags["addr:neighbourhood"] ||
+    null;
+
+  const city =
+    tags["addr:city"] ||
+    "Córdoba";
+
+  const address =
+    street
+      ? [
+          street,
+          neighborhood,
+          city,
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : null;
 
   const hours =
     parseSimpleHours(
@@ -602,11 +841,35 @@ function mapElementToVenue(
     );
 
   const isNight =
-    amenity === "nightclub";
+    amenity ===
+    "nightclub";
 
   const isBar =
     amenity === "bar" ||
     amenity === "pub";
+
+  /*
+   * OSM no proporciona normalmente
+   * una valoración tipo Google.
+   *
+   * Por eso NO inventamos una.
+   *
+   * Se usa 0 para mantener compatibilidad
+   * con el frontend actual, que espera
+   * un número.
+   */
+
+  let rating = 0;
+
+  if (
+    tags.stars &&
+    Number.isFinite(
+      Number(tags.stars)
+    )
+  ) {
+    rating =
+      Number(tags.stars);
+  }
 
   return {
     name,
@@ -615,15 +878,11 @@ function mapElementToVenue(
       emojiFor(amenity),
 
     price:
-      amenity === "fast_food" ||
-      amenity === "cafe"
-        ? 1
-        : 2,
+      estimatePriceForAmenity(
+        amenity
+      ),
 
-    /*
-     * NO inventamos una valoración.
-     */
-    rating: null,
+    rating,
 
     dist:
       distanceMinutes,
@@ -646,7 +905,10 @@ function mapElementToVenue(
       isNight
         ? ["night"]
         : isBar
-        ? ["afternoon", "night"]
+        ? [
+            "afternoon",
+            "night",
+          ]
         : [
             "morning",
             "afternoon",
@@ -665,7 +927,47 @@ function mapElementToVenue(
 
     source:
       "openstreetmap",
+
+    website:
+      tags.website ||
+      tags["contact:website"] ||
+      null,
+
+    phone:
+      tags.phone ||
+      tags["contact:phone"] ||
+      null,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* PRECIO POR CATEGORÍA                                               */
+/* ------------------------------------------------------------------ */
+
+function estimatePriceForAmenity(
+  amenity
+) {
+  if (
+    amenity === "fast_food" ||
+    amenity === "cafe"
+  ) {
+    return 1;
+  }
+
+  if (
+    amenity === "bar" ||
+    amenity === "pub"
+  ) {
+    return 2;
+  }
+
+  if (
+    amenity === "nightclub"
+  ) {
+    return 3;
+  }
+
+  return 2;
 }
 
 /* ------------------------------------------------------------------ */
@@ -690,7 +992,8 @@ export default async function handler(
   const {
     city,
     intent,
-  } = req.body || {};
+  } =
+    req.body || {};
 
   if (
     !city ||
@@ -705,13 +1008,31 @@ export default async function handler(
       });
   }
 
+  /*
+   * El frontend manda claves como:
+   * CENA, BEBIDA, FINAL, etc.
+   */
+
+  const rawIntent =
+    String(
+      intent || ""
+    ).trim();
+
   const normalizedIntent =
-    normalizeText(intent);
+    normalizeText(
+      rawIntent
+    );
 
   const aliases = {
     cena: "comer",
     bebida: "beber",
     final: "comer",
+
+    cultura: "cultura",
+    paseo: "paseo",
+    aire_libre:
+      "aire_libre",
+    fiesta: "fiesta",
 
     actividad_familia:
       "familia",
@@ -730,6 +1051,9 @@ export default async function handler(
     normalizedIntent;
 
   const amenities =
+    INTENT_CATEGORIES[
+      rawIntent
+    ] ||
     INTENT_CATEGORIES[
       canonicalIntent
     ] ||
@@ -758,7 +1082,7 @@ export default async function handler(
     }
 
     /*
-     * 2. Buscar lugares reales.
+     * 2. Buscar lugares.
      */
 
     const elements =
@@ -769,7 +1093,7 @@ export default async function handler(
       });
 
     /*
-     * 3. Convertir resultados.
+     * 3. Convertir y filtrar.
      */
 
     const seen =
@@ -781,7 +1105,8 @@ export default async function handler(
           mapElementToVenue(
             element,
             location,
-            canonicalIntent
+            canonicalIntent,
+            amenities
           )
         )
         .filter(Boolean)
@@ -814,12 +1139,10 @@ export default async function handler(
     /*
      * IMPORTANTE:
      *
-     * Si no encontramos lugares,
-     * devolvemos [].
+     * No rellenamos con datos inventados.
      *
-     * No usamos lugares viejos,
-     * no inventamos lugares,
-     * no ponemos plazas para rellenar.
+     * Si OpenStreetMap no encuentra
+     * un lugar adecuado, places queda [].
      */
 
     return res
@@ -840,7 +1163,7 @@ export default async function handler(
       });
   } catch (error) {
     console.error(
-      "Error buscando lugares:",
+      "SALIME /api/lugares:",
       error
     );
 
@@ -856,4 +1179,4 @@ export default async function handler(
           "openstreetmap",
       });
   }
-      }
+          }
