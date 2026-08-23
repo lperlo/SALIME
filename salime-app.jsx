@@ -2445,12 +2445,25 @@ export default function App() {
 
   const runRegeneration =
     (next) => {
+      /*
+       * FIX (pantalla en blanco al "Sorprendeme de nuevo" o al
+       * ajustar el plan):
+       *
+       * Cuando Geoapify no encuentra un lugar real para un paso,
+       * ese step queda con venue: null (a propósito, para no
+       * inventar lugares). Antes, acá se hacía
+       * plan.map((s) => s.venue.name) sin chequear que venue
+       * existiera, y con cualquier paso en null la app explotaba
+       * con "Cannot read properties of null (reading 'name')".
+       *
+       * Ahora primero filtramos los pasos sin venue, así excludeNames
+       * solo incluye lugares reales que sí se mostraron.
+       */
       const excludeNames =
         plan
-          ? plan.map(
-              (s) =>
-                s.venue.name
-            )
+          ? plan
+              .filter((s) => s.venue)
+              .map((s) => s.venue.name)
           : [];
 
       setWorking(true);
