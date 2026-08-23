@@ -279,19 +279,19 @@ const STEPS_DAY = [
   {
     key: "cena",
     label: "PARA ARRANCAR",
-    time: "17:00",
+    time: "12:30",
     pool: CENA,
   },
   {
     key: "bebida",
     label: "SEGUIR",
-    time: "18:30",
+    time: "14:00",
     pool: BEBIDA,
   },
   {
     key: "final",
     label: "PARA TERMINAR",
-    time: "20:00",
+    time: "15:30",
     pool: FINAL,
   },
 ];
