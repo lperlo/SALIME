@@ -1055,6 +1055,17 @@ function getSteps({
     /*
      * Si pide comer a la mañana/tarde, mantenemos horarios
      * coherentes en vez de obligarlo a cenar.
+     *
+     * FIX (plazas/plazoletas apareciendo en planes de "comer" con
+     * franja mañana/tarde, ej. "Plazoleta Comandante Coronel Anibal
+     * Montes", "Plaza Sarmiento"):
+     *
+     * Estas dos variantes usaban pool: MERIENDA_FAMILIA (intent
+     * "familia": parques, museos, restaurantes mezclados) y
+     * pool: PASEO (intent "paseo": parques, sitios turísticos) para
+     * el 2do y 3er paso. Un plan de "comer" terminaba pidiéndole a
+     * /api/lugares categorías que no son de comida. Ahora los tres
+     * pasos usan pools que mapean a intent "comer" (CENA/FINAL).
      */
     if (timeBucket === "morning") {
       return [
@@ -1068,13 +1079,13 @@ function getSteps({
           key: "cafe",
           label: "SEGUIR",
           time: "12:00",
-          pool: MERIENDA_FAMILIA,
+          pool: FINAL,
         },
         {
-          key: "paseo",
+          key: "cierre",
           label: "PARA TERMINAR",
           time: "13:30",
-          pool: PASEO,
+          pool: FINAL,
         },
       ];
     }
@@ -1093,13 +1104,13 @@ function getSteps({
           key: "postre",
           label: "SEGUIR",
           time: "18:30",
-          pool: MERIENDA_FAMILIA,
+          pool: FINAL,
         },
         {
-          key: "paseo",
+          key: "cierre",
           label: "PARA TERMINAR",
           time: "20:00",
-          pool: PASEO,
+          pool: FINAL,
         },
       ];
     }
